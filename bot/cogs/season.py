@@ -1,6 +1,4 @@
-################################################################
-FILE PATH TO TYPE ON GITHUB: bot/cogs/season.py
-################################################################
+
 """Season lifecycle commands: /season create, /season activate, /season list,
 /season info. Commissioner-only except `info`/`list`."""
 from __future__ import annotations
@@ -63,4 +61,3 @@ class SeasonCog(commands.Cog):
 async def setup(bot: commands.Bot):
     await bot.add_cog(SeasonCog(bot))
 
-===== END OF FILE, COPY UP TO HERE =====
