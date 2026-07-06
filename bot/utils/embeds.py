@@ -1,6 +1,4 @@
-################################################################
-FILE PATH TO TYPE ON GITHUB: bot/utils/embeds.py
-################################################################
+
 """Small embed-building helpers shared across cogs, kept consistent so the
 bot has one visual identity in plain-text/embed responses (graphics handle
 the heavier visual lifting via bot/graphics/*)."""
@@ -24,4 +22,3 @@ def success_embed(title: str, description: str = "") -> discord.Embed:
 def error_embed(title: str, description: str = "") -> discord.Embed:
     return discord.Embed(title=f"❌ {title}", description=description, color=ERROR_COLOR)
 
-===== END OF FILE, COPY UP TO HERE =====
