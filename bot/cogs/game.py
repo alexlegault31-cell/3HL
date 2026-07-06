@@ -1,4 +1,3 @@
-
 """
 The centerpiece of the bot: `/entergame`, plus `/game delete`, `/game edit`,
 and the manual `/game ffw` forfeit flow.
@@ -18,6 +17,7 @@ from discord import app_commands
 from discord.ext import commands
 from sqlalchemy import select
 
+from bot.cogs.channel_updater import refresh_all_channels
 from bot.config import settings
 from bot.database import get_session
 from bot.graphics.game_result_graphic import render_game_result
@@ -68,6 +68,7 @@ class GameCog(commands.Cog):
             recap_text = await self._generate_and_attach_recap(session, result.game, result.home_team, result.away_team)
             graphic_path = render_game_result(result.game, result.home_team, result.away_team)
             result.game.result_graphic_path = graphic_path
+            await refresh_all_channels(interaction.client, session)
 
         embed = success_embed(
             "Game imported",
@@ -100,6 +101,7 @@ class GameCog(commands.Cog):
 
             game = await session.get(Game, schedule.game_id)
             await reverse_game(session, game)
+            await refresh_all_channels(interaction.client, session)
 
         await interaction.response.send_message(
             embed=success_embed("Game deleted", f"Game #{game_number} was removed and all stats/standings reversed.")
@@ -139,6 +141,7 @@ class GameCog(commands.Cog):
 
             await session.flush()
             await recompute_standings(session, s.id)
+            await refresh_all_channels(interaction.client, session)
 
         await interaction.response.send_message(
             embed=success_embed("Game corrected", f"Game #{game_number} updated to {home_score}-{away_score}. Note: per-player stat lines were NOT changed, only the team score/record.")
@@ -228,6 +231,7 @@ class GameCog(commands.Cog):
 
             await session.flush()
             await recompute_standings(session, s.id)
+            await refresh_all_channels(interaction.client, session)
             graphic_path = render_game_result(game, win_team, lose_team)
 
         embed = success_embed(
@@ -285,4 +289,3 @@ class GameCog(commands.Cog):
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(GameCog(bot))
-
