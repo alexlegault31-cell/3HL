@@ -1,7 +1,4 @@
 
-################################################################
-FILE PATH TO TYPE ON GITHUB: bot/database.py
-################################################################
 """
 Database engine / session management.
 
@@ -62,5 +59,3 @@ async def init_models() -> None:
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-
-===== END OF FILE, COPY UP TO HERE =====
