@@ -1,6 +1,4 @@
-################################################################
-FILE PATH TO TYPE ON GITHUB: bot/utils/checks.py
-################################################################
+
 """discord.app_commands check decorators wrapping permissions_service so
 cogs can just do `@commissioner_only()` / `@gm_only()` above a command."""
 from __future__ import annotations
@@ -27,5 +25,3 @@ def gm_only():
         return is_gm(interaction.user)
 
     return app_commands.check(predicate)
-
-===== END OF FILE, COPY UP TO HERE =====
