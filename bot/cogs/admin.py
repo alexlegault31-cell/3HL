@@ -1,6 +1,4 @@
-################################################################
-FILE PATH TO TYPE ON GITHUB: bot/cogs/admin.py
-################################################################
+
 """Bot-owner diagnostics: manual slash command sync, ping, basic error
 surface for app command failures (permission denials, etc.)."""
 from __future__ import annotations
@@ -61,4 +59,3 @@ async def setup(bot: commands.Bot):
 def embed_for_permission_error() -> discord.Embed:
     return error_embed("Permission denied", "You don't have the required role to run this command.")
 
-===== END OF FILE, COPY UP TO HERE =====
