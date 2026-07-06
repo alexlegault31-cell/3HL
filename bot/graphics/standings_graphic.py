@@ -1,6 +1,4 @@
-################################################################
-FILE PATH TO TYPE ON GITHUB: bot/graphics/standings_graphic.py
-################################################################
+
 """Renders the full league standings table as a PNG, for #standings."""
 from __future__ import annotations
 
@@ -95,4 +93,3 @@ def render_standings(
     img.save(out_path)
     return str(out_path)
 
-===== END OF FILE, COPY UP TO HERE =====
