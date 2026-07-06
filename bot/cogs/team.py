@@ -1,6 +1,4 @@
-################################################################
-FILE PATH TO TYPE ON GITHUB: bot/cogs/team.py
-################################################################
+
 """Team setup (/team create, /team link-club) and team stat/history/card
 lookups."""
 from __future__ import annotations
@@ -183,4 +181,3 @@ class TeamCog(commands.Cog):
 async def setup(bot: commands.Bot):
     await bot.add_cog(TeamCog(bot))
 
-===== END OF FILE, COPY UP TO HERE =====
