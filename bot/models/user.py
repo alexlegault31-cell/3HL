@@ -1,6 +1,4 @@
-################################################################
-FILE PATH TO TYPE ON GITHUB: bot/models/user.py
-################################################################
+
 """
 A `User` is a Discord account. Linking it to a `Player` (NHL gamertag) is
 what allows automatic stat tracking via /player link.
@@ -39,4 +37,3 @@ class User(Base, IDMixin, TimestampMixin):
     def __repr__(self) -> str:  # pragma: no cover
         return f"<User discord_id={self.discord_id} username={self.discord_username!r}>"
 
-===== END OF FILE, COPY UP TO HERE =====
