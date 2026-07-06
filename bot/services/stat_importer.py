@@ -1,4 +1,3 @@
-
 """
 The core import pipeline behind `/entergame <schedule_game_number>`.
 
@@ -47,7 +46,7 @@ from bot.models import (
     TeamSeason,
 )
 from bot.models.schedule import ScheduleStatus
-from bot.services.chelstats_client import ChelStatsClient, MatchDetail, MatchSummary
+from bot.services.chelstats_client import ChelStatsClient, MatchDetail
 from bot.services.standings_service import recompute_standings
 
 log = logging.getLogger(__name__)
@@ -92,23 +91,21 @@ async def import_game(
     if not away_ts.club_id:
         raise ImportError_(f"{schedule.away_team.name} has no linked Club ID. Run `/team link-club` first.")
 
-    match_summary = await _find_matching_match(client, home_ts.club_id, away_ts.club_id)
-    if match_summary is None:
+    match_detail = await _find_matching_match(client, home_ts.club_id, away_ts.club_id)
+    if match_detail is None:
         raise ImportError_(
             f"Couldn't find a recent EASHL match between {schedule.home_team.name} "
             f"(Club {home_ts.club_id}) and {schedule.away_team.name} (Club {away_ts.club_id}). "
             f"Make sure the game has been played and try again in a few minutes."
         )
 
-    existing = await session.scalar(select(Game).where(Game.external_match_id == match_summary.match_id))
+    existing = await session.scalar(select(Game).where(Game.external_match_id == match_detail.match_id))
     if existing is not None:
-        raise ImportError_(f"That EASHL match (`{match_summary.match_id}`) has already been imported as a game.")
+        raise ImportError_(f"That EASHL match (`{match_detail.match_id}`) has already been imported as a game.")
 
-    detail = await client.get_match_detail(match_summary.match_id, home_ts.club_id)
-    if detail is None:
-        raise ImportError_("Found the match but couldn't fetch its box score. Try again shortly.")
+    detail = match_detail
 
-    # Orient home/away correctly relative to our schedule (ChelStats doesn't
+    # Orient home/away correctly relative to our schedule (EA's API doesn't
     # know which club is "home" in our league).
     if detail.home.club_id == home_ts.club_id:
         home_box, away_box = detail.home, detail.away
@@ -309,7 +306,7 @@ async def _get_team_season(session: AsyncSession, team_id: int, season_id: int) 
     return ts
 
 
-async def _find_matching_match(client: ChelStatsClient, home_club_id: int, away_club_id: int) -> Optional[MatchSummary]:
+async def _find_matching_match(client: ChelStatsClient, home_club_id: int, away_club_id: int) -> Optional[MatchDetail]:
     home_matches = await client.get_recent_club_matches(home_club_id)
     away_match_ids = {m.match_id for m in await client.get_recent_club_matches(away_club_id)}
 
@@ -434,4 +431,3 @@ def undo_team_result(ts: TeamSeason, goals_for: int, goals_against: int, went_ot
     # discrepancy self-heals on the next game import.
     if ts.last_10:
         ts.last_10 = ts.last_10[:-1] or None
-
