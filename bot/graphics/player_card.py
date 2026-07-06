@@ -1,6 +1,4 @@
-################################################################
-FILE PATH TO TYPE ON GITHUB: bot/graphics/player_card.py
-################################################################
+
 """Renders a player profile / season stats card for /player card."""
 from __future__ import annotations
 
@@ -68,4 +66,3 @@ def render_player_card(player: Player, season: PlayerSeason, team: Team | None, 
     img.save(out_path)
     return str(out_path)
 
-===== END OF FILE, COPY UP TO HERE =====
