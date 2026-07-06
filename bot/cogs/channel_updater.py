@@ -1,6 +1,4 @@
-################################################################
-FILE PATH TO TYPE ON GITHUB: bot/cogs/channel_updater.py
-################################################################
+
 """
 Implements "Automatically update channels": a background loop that
 periodically regenerates the standings graphic, leaders boards, and
@@ -120,4 +118,3 @@ class ChannelUpdaterCog(commands.Cog):
 async def setup(bot: commands.Bot):
     await bot.add_cog(ChannelUpdaterCog(bot))
 
-===== END OF FILE, COPY UP TO HERE =====
