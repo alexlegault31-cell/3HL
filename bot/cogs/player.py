@@ -1,7 +1,4 @@
 
-################################################################
-FILE PATH TO TYPE ON GITHUB: bot/cogs/player.py
-################################################################
 """Player <-> Discord account linking and stat lookups."""
 from __future__ import annotations
 
@@ -161,4 +158,3 @@ class PlayerCog(commands.Cog):
 async def setup(bot: commands.Bot):
     await bot.add_cog(PlayerCog(bot))
 
-===== END OF FILE, COPY UP TO HERE =====
