@@ -1,6 +1,4 @@
-################################################################
-FILE PATH TO TYPE ON GITHUB: alembic/script.py.mako
-################################################################
+
 """${message}
 
 Revision ID: ${up_revision}
@@ -27,5 +25,3 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     ${downgrades if downgrades else "pass"}
-
-===== END OF FILE, COPY UP TO HERE =====
