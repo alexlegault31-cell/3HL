@@ -1,6 +1,4 @@
-################################################################
-FILE PATH TO TYPE ON GITHUB: bot/models/standings.py
-################################################################
+
 """
 StandingsEntry is technically derivable from TeamSeason, but we materialize
 it as its own table so that:
@@ -39,4 +37,3 @@ class StandingsEntry(Base, IDMixin, TimestampMixin):
     season: Mapped["Season"] = relationship()
     team: Mapped["Team"] = relationship()
 
-===== END OF FILE, COPY UP TO HERE =====
