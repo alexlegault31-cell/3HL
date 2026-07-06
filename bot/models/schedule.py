@@ -1,6 +1,4 @@
-################################################################
-FILE PATH TO TYPE ON GITHUB: bot/models/schedule.py
-################################################################
+
 """
 The schedule is the *source of truth* for the league. A ScheduleGame is
 created by the commissioner ahead of time (bulk import or manual) with a
@@ -60,4 +58,3 @@ class ScheduleGame(Base, IDMixin, TimestampMixin):
     def __repr__(self) -> str:  # pragma: no cover
         return f"<ScheduleGame #{self.game_number} season={self.season_id} status={self.status}>"
 
-===== END OF FILE, COPY UP TO HERE =====
