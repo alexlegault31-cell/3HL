@@ -1,6 +1,4 @@
-################################################################
-FILE PATH TO TYPE ON GITHUB: bot/services/season_service.py
-################################################################
+
 """Small helper for resolving "current season" + season-number lookups,
 used everywhere a command accepts an optional `season:` argument."""
 from __future__ import annotations
@@ -40,4 +38,3 @@ async def set_active_season(session: AsyncSession, number: int) -> Season:
         s.is_active = s.id == season.id
     return season
 
-===== END OF FILE, COPY UP TO HERE =====
