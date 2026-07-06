@@ -1,6 +1,4 @@
-################################################################
-FILE PATH TO TYPE ON GITHUB: bot/models/award.py
-################################################################
+
 from __future__ import annotations
 
 from typing import Optional
@@ -40,4 +38,3 @@ class AwardWinner(Base, IDMixin, TimestampMixin):
     player: Mapped["Player"] = relationship()
     team: Mapped[Optional["Team"]] = relationship()
 
-===== END OF FILE, COPY UP TO HERE =====
