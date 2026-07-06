@@ -1,6 +1,4 @@
-################################################################
-FILE PATH TO TYPE ON GITHUB: bot/services/standings_service.py
-################################################################
+
 """
 Recomputes the materialized `StandingsEntry` table for a season from the
 live `TeamSeason` rows. Called after every import/delete/forfeit so reads
@@ -50,4 +48,3 @@ async def recompute_standings(session: AsyncSession, season_id: int) -> list[Sta
     await session.flush()
     return entries
 
-===== END OF FILE, COPY UP TO HERE =====
