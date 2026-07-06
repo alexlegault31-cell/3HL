@@ -1,7 +1,4 @@
 
-################################################################
-FILE PATH TO TYPE ON GITHUB: bot/cogs/standings.py
-################################################################
 """`/standings` — the most frequently used read command. Posts the table as
 text (always) and offers the graphic table on demand via /standings graphic."""
 from __future__ import annotations
@@ -56,4 +53,3 @@ class StandingsCog(commands.Cog):
 async def setup(bot: commands.Bot):
     await bot.add_cog(StandingsCog(bot))
 
-===== END OF FILE, COPY UP TO HERE =====
