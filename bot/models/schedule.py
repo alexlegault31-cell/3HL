@@ -44,8 +44,10 @@ class ScheduleGame(Base, IDMixin, TimestampMixin):
     scheduled_at: Mapped[Optional[dt.datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
     status: Mapped[ScheduleStatus] = mapped_column(
-        Enum(ScheduleStatus, name="schedule_status"), default=ScheduleStatus.SCHEDULED, nullable=False
-    )
+       Enum(ScheduleStatus, name="schedule_status", values_callable=lambda obj: [e.value for e in obj]),
+       default=ScheduleStatus.SCHEDULED,
+       nullable=False,
+   )
 
     # Set once a Game has been imported / forfeit recorded against this slot.
     game_id: Mapped[Optional[int]] = mapped_column(ForeignKey("games.id", ondelete="SET NULL"), nullable=True)
