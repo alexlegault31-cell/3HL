@@ -1,3 +1,4 @@
+"""
 Thin async client around the ChelStats / ChelHead EASHL stats API.
 
 IMPORTANT — read before deploying
