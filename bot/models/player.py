@@ -1,6 +1,4 @@
-################################################################
-FILE PATH TO TYPE ON GITHUB: bot/models/player.py
-################################################################
+
 """
 Player identity vs. season-scoped stats vs. team membership are kept as
 three separate concepts:
@@ -122,4 +120,3 @@ class PlayerSeason(Base, IDMixin, TimestampMixin):
     def __repr__(self) -> str:  # pragma: no cover
         return f"<PlayerSeason player_id={self.player_id} season_id={self.season_id} pts={self.points}>"
 
-===== END OF FILE, COPY UP TO HERE =====
