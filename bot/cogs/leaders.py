@@ -1,7 +1,4 @@
 
-################################################################
-FILE PATH TO TYPE ON GITHUB: bot/cogs/leaders.py
-################################################################
 """`/leaders goals|assists|points|goalie`"""
 from __future__ import annotations
 
@@ -66,4 +63,3 @@ class LeadersCog(commands.Cog):
 async def setup(bot: commands.Bot):
     await bot.add_cog(LeadersCog(bot))
 
-===== END OF FILE, COPY UP TO HERE =====
