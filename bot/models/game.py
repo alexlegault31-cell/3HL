@@ -1,6 +1,4 @@
-################################################################
-FILE PATH TO TYPE ON GITHUB: bot/models/game.py
-################################################################
+
 """
 `Game` is a permanently-stored, completed result (the "we never overwrite
 history" record). `GameImport` is an audit trail of the raw ChelStats
@@ -70,4 +68,3 @@ class GameImport(Base, IDMixin, TimestampMixin):
 
     game: Mapped["Game"] = relationship()
 
-===== END OF FILE, COPY UP TO HERE =====
