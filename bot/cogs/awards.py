@@ -1,6 +1,4 @@
-################################################################
-FILE PATH TO TYPE ON GITHUB: bot/cogs/awards.py
-################################################################
+
 """Awards: commissioner-defined categories (MVP, Best Goalie, Best
 Defenseman, Rookie, ...) handed out per-season."""
 from __future__ import annotations
@@ -96,4 +94,3 @@ class AwardsCog(commands.Cog):
 async def setup(bot: commands.Bot):
     await bot.add_cog(AwardsCog(bot))
 
-===== END OF FILE, COPY UP TO HERE =====
