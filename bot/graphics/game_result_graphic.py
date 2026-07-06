@@ -1,6 +1,4 @@
-################################################################
-FILE PATH TO TYPE ON GITHUB: bot/graphics/game_result_graphic.py
-################################################################
+
 """Renders the final-score graphic posted to #game-results after every
 /entergame import or recorded forfeit."""
 from __future__ import annotations
@@ -73,4 +71,3 @@ def _draw_badge(draw: ImageDraw.ImageDraw, x: int, y: int, text: str, color, rig
     draw.rounded_rectangle([(x0, y), (x0 + w, y + 26)], radius=6, fill=color)
     draw.text((x0 + pad, y + 4), text, font=font, fill=(10, 10, 10))
 
-===== END OF FILE, COPY UP TO HERE =====
