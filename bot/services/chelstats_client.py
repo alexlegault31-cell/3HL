@@ -1,72 +1,68 @@
 """
 Thin async client around EA's real (undocumented, unofficial) Pro Clubs API.
- 
+
 CONFIRMED REAL ENDPOINT (as of July 2026)
 ------------------------------------------
-Unlike a hosted third-party service, "ChelStats"-style tools all pull
-directly from EA's own API at proclubs.ea.com. There is no separate
-"chel-stats.com" backend to authenticate against -- that was wrong in an
-earlier version of this file. The real, currently-working call shape is:
- 
+"ChelStats"-style tools all pull directly from EA's own API at
+proclubs.ea.com -- there is no separate hosted third-party backend to
+point at. The real, currently-working call shape is:
+
     GET https://proclubs.ea.com/api/nhl/clubs/matches
         ?clubIds=<club_id>
         &platform=common-gen5
-        &matchType=gameType5    (public/league matches)
-        or matchType=club_private (private lobby matches)
- 
-EA's server checks the `Referer` header and blocks requests that don't set
-it to an ea.com origin -- that's the actual reason the very first version
-of this file failed to connect at all (it pointed at a domain that never
-existed). This version sends that header on every request.
- 
-IMPORTANT CAVEATS -- read before assuming a failure is a bug
---------------------------------------------------------------
+        &matchType=gameType5      (public/league matchmaking games)
+        or matchType=club_private (privately-hosted lobby games)
+
+This single endpoint returns full match history INCLUDING the complete
+per-player box score for each match already -- there is no separate
+"match detail" endpoint. An earlier version of this file assumed a
+two-step summary-then-detail API shape that doesn't actually exist; this
+version calls the one real endpoint and reuses its response for both
+"which match is this" and "what's the box score."
+
+EA's server also checks the `Referer` header and blocks requests that
+don't set it to an ea.com origin -- every request below sends that.
+
+IMPORTANT CAVEATS -- read before assuming a failure is a bug in this code
+--------------------------------------------------------------------------
 1. EA's `club_private` match-history endpoint (used for privately-hosted
-   lobby games, which is how most organized leagues actually play) has
-   been reported broken/unreliable by other developers across several NHL
-   versions on EA's own forums -- independent of anything in this file.
-2. EA's Pro Clubs API as a whole has had multi-week outages (one reported
-   as starting June 19, 2026). If every request fails the same way, check
-   whether EA's API is simply down before assuming this code is wrong.
-3. This is unversioned and undocumented. EA can change the response shape
-   at any time with no notice. `_normalize_match_summary` /
-   `_normalize_match_detail` below are the only two functions that should
-   need editing if the JSON shape drifts from what's assumed here.
+   lobby games, which is how most organized leagues actually play their
+   games) has been reported broken/unreliable by other developers across
+   several NHL versions on EA's own forums -- independent of anything in
+   this file. If your league plays private lobby matches and imports keep
+   coming back with "no match found," try setting CHELSTATS_MATCH_TYPE to
+   `gameType5` temporarily just to confirm the connection itself works,
+   then investigate the private-match-specific issue separately.
+2. EA's Pro Clubs API as a whole has had multi-week outages (one publicly
+   reported as starting June 19, 2026). If every request fails the same
+   way regardless of Club ID, check EA's own forums for current outage
+   reports before assuming this code is broken.
+3. This is unversioned and undocumented -- EA can change the response
+   shape at any time with no notice. `_normalize_match` below is the only
+   function that should need editing if the JSON shape drifts from what's
+   assumed here.
 """
 from __future__ import annotations
- 
+
 import logging
 from dataclasses import dataclass, field
 from typing import Any, Optional
- 
+
 import aiohttp
 from tenacity import retry, stop_after_attempt, wait_exponential
- 
+
 from bot.config import settings
- 
+
 log = logging.getLogger(__name__)
- 
- 
-@dataclass
-class MatchSummary:
-    """Normalized "one row in a club's match history" result."""
- 
-    match_id: str
-    timestamp: int  # unix epoch seconds
-    club_id_home: int
-    club_id_away: int
-    score_home: int
-    score_away: int
-    raw: dict = field(repr=False, default_factory=dict)
- 
- 
+
+
 @dataclass
 class PlayerBoxScore:
     gamertag: str
     external_player_id: Optional[str]
     club_id: int
     is_goalie: bool
- 
+
     # skater fields
     goals: int = 0
     assists: int = 0
@@ -75,7 +71,7 @@ class PlayerBoxScore:
     pim: int = 0
     shots: int = 0
     ppg: int = 0
- 
+
     # goalie fields
     shots_against: int = 0
     saves: int = 0
@@ -83,8 +79,8 @@ class PlayerBoxScore:
     minutes_played: float = 0.0
     is_win: bool = False
     is_ot_loss: bool = False
- 
- 
+
+
 @dataclass
 class TeamBoxScore:
     club_id: int
@@ -94,8 +90,8 @@ class TeamBoxScore:
     pim: int
     powerplay_goals: int = 0
     powerplay_opportunities: int = 0
- 
- 
+
+
 @dataclass
 class MatchDetail:
     match_id: str
@@ -106,24 +102,28 @@ class MatchDetail:
     away: TeamBoxScore
     players: list[PlayerBoxScore]
     raw: dict = field(repr=False, default_factory=dict)
- 
- 
+
+
 class ChelStatsError(RuntimeError):
     pass
- 
- 
+
+
 class ChelStatsClient:
     def __init__(self, base_url: Optional[str] = None, api_key: Optional[str] = None) -> None:
         self.base_url = (base_url or settings.chelstats_base_url).rstrip("/")
         self.api_key = api_key if api_key is not None else settings.chelstats_api_key
         self.platform = settings.chelstats_platform
- 
+        self.match_type = settings.chelstats_match_type
+
     def _headers(self) -> dict:
-        headers = {"Accept": "application/json"}
+        # EA's servers reject requests without an ea.com Referer -- this is
+        # the single most common cause of a connection appearing to "not
+        # work" against this API.
+        headers = {"Accept": "application/json", "Referer": "https://www.ea.com"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
         return headers
- 
+
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
     async def _get(self, path: str, params: Optional[dict] = None) -> Any:
         url = f"{self.base_url}{path}"
@@ -135,88 +135,61 @@ class ChelStatsClient:
                     body = await resp.text()
                     raise ChelStatsError(f"GET {url} -> {resp.status}: {body[:300]}")
                 return await resp.json()
- 
-    async def get_recent_club_matches(self, club_id: int, limit: Optional[int] = None) -> list[MatchSummary]:
-        """Fetch a club's recent EASHL match history.
- 
-        Expected upstream shape (ChelStats-style):
-            GET /clubs/{club_id}/matches?platform=common-gen5&limit=20
-            -> {"matches": [{ "matchId": "...", "timestamp": 169..., 
-                               "clubs": {"<club_id>": {...}, "<opp_id>": {...}} }, ...]}
+
+    async def get_recent_club_matches(self, club_id: int, limit: Optional[int] = None) -> list[MatchDetail]:
+        """Fetch a club's recent match history -- EA's real API returns
+        each match's FULL box score already, so this doubles as both
+        "what matches has this club played" and "what happened in them."
         """
-        limit = limit or settings.chelstats_match_lookback
         data = await self._get(
-            f"/clubs/{club_id}/matches",
-            params={"platform": self.platform, "limit": limit},
+            "/clubs/matches",
+            params={
+                "clubIds": club_id,
+                "platform": self.platform,
+                "matchType": self.match_type,
+            },
         )
         if not data:
             return []
-        return [self._normalize_match_summary(m) for m in data.get("matches", [])]
- 
-    async def get_match_detail(self, match_id: str, club_id: int) -> Optional[MatchDetail]:
-        """Fetch the full box score for a single match.
- 
-        Expected upstream shape (ChelStats-style):
-            GET /matches/{match_id}?clubId={club_id}&platform=common-gen5
-            -> {"matchId": ..., "timestamp": ..., "clubs": {...}, "players": {...}}
-        """
-        data = await self._get(
-            f"/matches/{match_id}",
-            params={"clubId": club_id, "platform": self.platform},
-        )
-        if not data:
-            return None
-        return self._normalize_match_detail(data)
- 
+        limit = limit or settings.chelstats_match_lookback
+        matches = data if isinstance(data, list) else data.get("matches", [])
+        normalized = [self._normalize_match(m) for m in matches]
+        normalized.sort(key=lambda m: m.timestamp, reverse=True)
+        return normalized[:limit]
+
     # ------------------------------------------------------------------
-    # Normalization — adapt these two methods if your provider's JSON
-    # shape differs. Everything else in the bot is provider-agnostic.
+    # Normalization -- this is the one place to edit if EA's JSON shape
+    # drifts from what's assumed here. Everything else in the bot works
+    # against the MatchDetail dataclass, never raw provider JSON.
     # ------------------------------------------------------------------
- 
+
     @staticmethod
-    def _normalize_match_summary(raw: dict) -> MatchSummary:
+    def _normalize_match(raw: dict) -> "MatchDetail":
         clubs = raw.get("clubs", {})
         club_ids = list(clubs.keys())
         if len(club_ids) != 2:
-            raise ChelStatsError(f"Unexpected match summary shape, clubs={club_ids}")
-        c1, c2 = club_ids
-        return MatchSummary(
-            match_id=str(raw["matchId"]),
-            timestamp=int(raw["timestamp"]),
-            club_id_home=int(c1),
-            club_id_away=int(c2),
-            score_home=int(clubs[c1].get("score", 0)),
-            score_away=int(clubs[c2].get("score", 0)),
-            raw=raw,
-        )
- 
-    @staticmethod
-    def _normalize_match_detail(raw: dict) -> MatchDetail:
-        clubs = raw.get("clubs", {})
-        club_ids = list(clubs.keys())
-        if len(club_ids) != 2:
-            raise ChelStatsError(f"Unexpected match detail shape, clubs={club_ids}")
+            raise ChelStatsError(f"Unexpected match shape, clubs={club_ids}")
         home_id, away_id = club_ids
- 
+
         def team_box(cid: str) -> TeamBoxScore:
             c = clubs[cid]
             return TeamBoxScore(
                 club_id=int(cid),
-                goals=int(c.get("score", 0)),
+                goals=int(c.get("score", c.get("goals", 0))),
                 shots=int(c.get("shots", 0)),
                 hits=int(c.get("hits", 0)),
                 pim=int(c.get("pim", 0)),
                 powerplay_goals=int(c.get("ppg", 0)),
                 powerplay_opportunities=int(c.get("ppOpportunities", 0)),
             )
- 
+
         players: list[PlayerBoxScore] = []
         for cid, roster in raw.get("players", {}).items():
             for _, p in roster.items():
                 is_goalie = str(p.get("position", "")).lower() in ("goalie", "g")
                 players.append(
                     PlayerBoxScore(
-                        gamertag=p["playername"],
+                        gamertag=p.get("playername", p.get("persona", "Unknown")),
                         external_player_id=str(p.get("playerId")) if p.get("playerId") else None,
                         club_id=int(cid),
                         is_goalie=is_goalie,
@@ -231,13 +204,13 @@ class ChelStatsClient:
                         saves=int(p.get("glsaves", 0)),
                         goals_against=int(p.get("glga", 0)),
                         minutes_played=float(p.get("glmins", 0)) / 60.0 if p.get("glmins") else 0.0,
-                        is_win=bool(int(p.get("glwins", 0))),
-                        is_ot_loss=bool(int(p.get("otlosses", 0))) if "otlosses" in p else False,
+                        is_win=bool(int(p.get("glwins", 0))) if p.get("glwins") else False,
+                        is_ot_loss=bool(int(p.get("otlosses", 0))) if p.get("otlosses") else False,
                     )
                 )
- 
+
         return MatchDetail(
-            match_id=str(raw.get("matchId", "")),
+            match_id=str(raw.get("matchId", raw.get("timestamp", ""))),
             timestamp=int(raw.get("timestamp", 0)),
             went_to_overtime=bool(raw.get("wentToOt", False)),
             went_to_shootout=bool(raw.get("wentToShootout", False)),
@@ -246,8 +219,3 @@ class ChelStatsClient:
             players=players,
             raw=raw,
         )
-
-
-
-
-         
