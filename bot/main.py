@@ -1,6 +1,4 @@
-################################################################
-FILE PATH TO TYPE ON GITHUB: bot/main.py
-################################################################
+
 """
 Entrypoint: `python -m bot.main`
 
@@ -85,5 +83,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
-===== END OF FILE, COPY UP TO HERE =====
