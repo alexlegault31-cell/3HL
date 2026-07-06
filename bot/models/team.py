@@ -1,6 +1,4 @@
-################################################################
-FILE PATH TO TYPE ON GITHUB: bot/models/team.py
-################################################################
+
 """
 `Team` is the franchise-level, season-independent identity (e.g. "Italy").
 `TeamSeason` is the per-season participation row that actually carries the
@@ -78,4 +76,3 @@ class TeamSeason(Base, IDMixin, TimestampMixin):
     def __repr__(self) -> str:  # pragma: no cover
         return f"<TeamSeason team_id={self.team_id} season_id={self.season_id} {self.wins}-{self.losses}-{self.ot_losses}>"
 
-===== END OF FILE, COPY UP TO HERE =====
