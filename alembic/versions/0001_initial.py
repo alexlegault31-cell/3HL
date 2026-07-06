@@ -1,6 +1,4 @@
-################################################################
-FILE PATH TO TYPE ON GITHUB: alembic/versions/0001_initial.py
-################################################################
+
 """initial schema
 
 Revision ID: 0001_initial
@@ -359,5 +357,3 @@ def downgrade() -> None:
     op.drop_table("seasons")
     sa.Enum(name="schedule_status").drop(op.get_bind(), checkfirst=True)
     sa.Enum(name="transaction_type").drop(op.get_bind(), checkfirst=True)
-
-===== END OF FILE, COPY UP TO HERE =====
