@@ -1,6 +1,4 @@
-################################################################
-FILE PATH TO TYPE ON GITHUB: bot/models/settings.py
-################################################################
+
 """
 Generic per-guild key/value settings store. Used for things that don't
 deserve their own column/table (feature flags, last-auto-post message IDs
@@ -24,4 +22,3 @@ class GuildSetting(Base, IDMixin, TimestampMixin):
     key: Mapped[str] = mapped_column(String(128), nullable=False)
     value: Mapped[Optional[str]] = mapped_column(String(2000), nullable=True)
 
-===== END OF FILE, COPY UP TO HERE =====
