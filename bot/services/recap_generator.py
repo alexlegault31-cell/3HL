@@ -1,6 +1,4 @@
-################################################################
-FILE PATH TO TYPE ON GITHUB: bot/services/recap_generator.py
-################################################################
+
 """
 Generates the short AI recap posted to #game-results after every import,
 e.g.:
@@ -127,4 +125,3 @@ def format_top_performers(player_lines: list[tuple[Player, PlayerGameStat]], goa
             out.append(f"{player.gamertag} earned the win with {gline.saves} saves on {gline.shots_against} shots.")
     return out
 
-===== END OF FILE, COPY UP TO HERE =====
