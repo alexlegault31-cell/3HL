@@ -1,7 +1,4 @@
 
-################################################################
-FILE PATH TO TYPE ON GITHUB: bot/services/leaders_service.py
-################################################################
 """
 Queries backing `/leaders goals|assists|points|goalie`. Always season-
 scoped; "leaders" with no season specified means the currently active
@@ -102,4 +99,3 @@ async def goalie_leaders(session: AsyncSession, season_id: int, limit: int = 10)
         for i, (ps, p, t) in enumerate(scored[:limit])
     ]
 
-===== END OF FILE, COPY UP TO HERE =====
