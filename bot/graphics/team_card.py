@@ -1,6 +1,4 @@
-################################################################
-FILE PATH TO TYPE ON GITHUB: bot/graphics/team_card.py
-################################################################
+
 """Renders team profile cards (/team card) and weekly/leaders boards
 (/leaders ...)."""
 from __future__ import annotations
@@ -111,4 +109,3 @@ def render_leaders_board(title: str, season_label: str, rows: Sequence[LeaderRow
     img.save(out_path)
     return str(out_path)
 
-===== END OF FILE, COPY UP TO HERE =====
