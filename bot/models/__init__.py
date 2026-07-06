@@ -1,6 +1,4 @@
-################################################################
-FILE PATH TO TYPE ON GITHUB: bot/models/__init__.py
-################################################################
+
 from bot.models.base import Base  # noqa: F401
 from bot.models.user import User  # noqa: F401
 from bot.models.season import Season  # noqa: F401
@@ -38,4 +36,3 @@ __all__ = [
     "GuildSetting",
 ]
 
-===== END OF FILE, COPY UP TO HERE =====
