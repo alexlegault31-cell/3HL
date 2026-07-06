@@ -1,6 +1,4 @@
-################################################################
-FILE PATH TO TYPE ON GITHUB: bot/models/base.py
-################################################################
+
 """
 Shared SQLAlchemy declarative base + reusable mixins.
 
@@ -40,4 +38,3 @@ class TimestampMixin:
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
 
-===== END OF FILE, COPY UP TO HERE =====
