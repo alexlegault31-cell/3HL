@@ -30,7 +30,10 @@ class Transaction(Base, IDMixin, TimestampMixin):
     season_id: Mapped[int] = mapped_column(ForeignKey("seasons.id", ondelete="CASCADE"), nullable=False)
     player_id: Mapped[int] = mapped_column(ForeignKey("players.id", ondelete="CASCADE"), nullable=False)
 
-    type: Mapped[TransactionType] = mapped_column(Enum(TransactionType, name="transaction_type"), nullable=False)
+    type: Mapped[TransactionType] = mapped_column(
+       Enum(TransactionType, name="transaction_type", values_callable=lambda obj: [e.value for e in obj]),
+       nullable=False,
+   )
 
     from_team_id: Mapped[Optional[int]] = mapped_column(ForeignKey("teams.id", ondelete="SET NULL"), nullable=True)
     to_team_id: Mapped[Optional[int]] = mapped_column(ForeignKey("teams.id", ondelete="SET NULL"), nullable=True)
