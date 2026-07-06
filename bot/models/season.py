@@ -1,6 +1,4 @@
-################################################################
-FILE PATH TO TYPE ON GITHUB: bot/models/season.py
-################################################################
+
 """
 Seasons are the backbone of the "never overwrite history" requirement.
 Every season-scoped table (TeamSeason, PlayerSeason, ScheduleGame, Game,
@@ -34,4 +32,3 @@ class Season(Base, IDMixin, TimestampMixin):
     def __repr__(self) -> str:  # pragma: no cover
         return f"<Season #{self.number} {self.name!r} active={self.is_active}>"
 
-===== END OF FILE, COPY UP TO HERE =====
