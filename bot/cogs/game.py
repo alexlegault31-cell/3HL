@@ -1,6 +1,4 @@
-################################################################
-FILE PATH TO TYPE ON GITHUB: bot/cogs/game.py
-################################################################
+
 """
 The centerpiece of the bot: `/entergame`, plus `/game delete`, `/game edit`,
 and the manual `/game ffw` forfeit flow.
@@ -288,4 +286,3 @@ class GameCog(commands.Cog):
 async def setup(bot: commands.Bot):
     await bot.add_cog(GameCog(bot))
 
-===== END OF FILE, COPY UP TO HERE =====
