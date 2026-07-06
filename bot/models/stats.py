@@ -1,6 +1,4 @@
-################################################################
-FILE PATH TO TYPE ON GITHUB: bot/models/stats.py
-################################################################
+
 """
 Per-game box score rows. These are what `/player gamelog` reads, and what
 `/game delete` must remove (along with reversing the aggregates they fed
@@ -79,4 +77,3 @@ class TeamGameStat(Base, IDMixin, TimestampMixin):
     game: Mapped["Game"] = relationship()
     team: Mapped["Team"] = relationship()
 
-===== END OF FILE, COPY UP TO HERE =====
