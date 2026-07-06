@@ -1,6 +1,4 @@
-################################################################
-FILE PATH TO TYPE ON GITHUB: bot/models/forfeit.py
-################################################################
+
 from __future__ import annotations
 
 import datetime as dt
@@ -38,4 +36,3 @@ class Forfeit(Base, IDMixin, TimestampMixin):
     winning_team: Mapped["Team"] = relationship(foreign_keys=[winning_team_id])
     losing_team: Mapped["Team"] = relationship(foreign_keys=[losing_team_id])
 
-===== END OF FILE, COPY UP TO HERE =====
