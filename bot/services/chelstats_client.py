@@ -245,3 +245,9 @@ class ChelStatsClient:
             away=team_box(away_id),
             players=players,
             raw=raw,
+        )
+
+
+
+
+         
