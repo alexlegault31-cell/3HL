@@ -1,6 +1,4 @@
-################################################################
-FILE PATH TO TYPE ON GITHUB: bot/models/transaction.py
-################################################################
+
 from __future__ import annotations
 
 import datetime as dt
@@ -46,4 +44,3 @@ class Transaction(Base, IDMixin, TimestampMixin):
     from_team: Mapped[Optional["Team"]] = relationship(foreign_keys=[from_team_id])
     to_team: Mapped[Optional["Team"]] = relationship(foreign_keys=[to_team_id])
 
-===== END OF FILE, COPY UP TO HERE =====
