@@ -1,6 +1,4 @@
-################################################################
-FILE PATH TO TYPE ON GITHUB: scripts/seed.py
-################################################################
+
 """
 Optional convenience script: creates Season 1, two demo teams, and links
 placeholder Club IDs, matching the example in the spec (Italy/France).
@@ -34,5 +32,3 @@ async def seed():
 
 if __name__ == "__main__":
     asyncio.run(seed())
-
-===== END OF FILE, COPY UP TO HERE =====
