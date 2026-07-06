@@ -1,6 +1,4 @@
-################################################################
-FILE PATH TO TYPE ON GITHUB: bot/services/permissions_service.py
-################################################################
+
 """
 Permission tiers, per the spec:
   Commissioner -> full control
@@ -42,4 +40,3 @@ def require_gm(member: discord.Member) -> None:
     if not is_gm(member):
         raise PermissionDenied(f"{settings.role_gm} or {settings.role_commissioner}")
 
-===== END OF FILE, COPY UP TO HERE =====
