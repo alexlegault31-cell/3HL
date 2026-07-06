@@ -1,6 +1,4 @@
-################################################################
-FILE PATH TO TYPE ON GITHUB: bot/services/stat_importer.py
-################################################################
+
 """
 The core import pipeline behind `/entergame <schedule_game_number>`.
 
@@ -437,4 +435,3 @@ def undo_team_result(ts: TeamSeason, goals_for: int, goals_against: int, went_ot
     if ts.last_10:
         ts.last_10 = ts.last_10[:-1] or None
 
-===== END OF FILE, COPY UP TO HERE =====
