@@ -1,6 +1,4 @@
-################################################################
-FILE PATH TO TYPE ON GITHUB: bot/cogs/schedule.py
-################################################################
+
 """Schedule system. The schedule is the source of truth: ScheduleGame rows
 are created ahead of time (by a commissioner) and only transition to
 "played" once /entergame successfully imports a result for them."""
@@ -139,4 +137,3 @@ class ScheduleCog(commands.Cog):
 async def setup(bot: commands.Bot):
     await bot.add_cog(ScheduleCog(bot))
 
-===== END OF FILE, COPY UP TO HERE =====
