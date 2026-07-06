@@ -1,4 +1,3 @@
-
 """
 Centralized configuration for the NEHL bot.
 
@@ -53,10 +52,11 @@ class Settings(BaseSettings):
         return self
 
     # ChelStats
-    chelstats_base_url: str = "https://api.chel-stats.com"
+    chelstats_base_url: str = "https://proclubs.ea.com/api/nhl"
     chelstats_api_key: str = ""
     chelstats_match_lookback: int = 20
     chelstats_platform: str = "common-gen5"
+    chelstats_match_type: str = "club_private"
 
     # AI Recaps
     openai_api_key: str = ""
@@ -99,4 +99,3 @@ def get_settings() -> Settings:
 
 
 settings = get_settings()
-
