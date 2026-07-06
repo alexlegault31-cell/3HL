@@ -1,6 +1,4 @@
-################################################################
-FILE PATH TO TYPE ON GITHUB: bot/graphics/theme.py
-################################################################
+
 """
 Shared visual theme for every generated graphic. Centralizing this means
 re-skinning the whole bot for a new league is a one-file change.
@@ -73,4 +71,3 @@ def hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
         return Theme.ACCENT
     return tuple(int(h[i : i + 2], 16) for i in (0, 2, 4))  # type: ignore[return-value]
 
-===== END OF FILE, COPY UP TO HERE =====
