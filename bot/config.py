@@ -1,6 +1,4 @@
-################################################################
-FILE PATH TO TYPE ON GITHUB: bot/config.py
-################################################################
+
 """
 Centralized configuration for the NEHL bot.
 
@@ -102,4 +100,3 @@ def get_settings() -> Settings:
 
 settings = get_settings()
 
-===== END OF FILE, COPY UP TO HERE =====
