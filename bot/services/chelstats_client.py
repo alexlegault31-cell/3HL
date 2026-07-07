@@ -104,7 +104,7 @@ class ChelStatsError(RuntimeError):
     pass
 
 
-def _split_proxy_credentials(proxy_url: str) -> tuple[Optional[str], Optional[aiohttp.BasicAuth]]:
+def split_proxy_credentials(proxy_url: str) -> tuple[Optional[str], Optional[aiohttp.BasicAuth]]:
     """aiohttp does not reliably pull username:password out of a proxy URL
     the way some other HTTP libraries (e.g. requests) do -- it needs the
     bare scheme://host:port passed as `proxy=` and the credentials passed
@@ -142,7 +142,7 @@ class ChelStatsClient:
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
     async def _get(self, path: str, params: Optional[dict] = None) -> Any:
         url = f"{self.base_url}{path}"
-        proxy_url, proxy_auth = _split_proxy_credentials(settings.chelstats_proxy_url)
+        proxy_url, proxy_auth = split_proxy_credentials(settings.chelstats_proxy_url)
         async with aiohttp.ClientSession(headers=self._headers()) as session:
             async with session.get(
                 url,
