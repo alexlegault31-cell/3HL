@@ -80,6 +80,32 @@ class AdminCog(commands.Cog):
                 elapsed = time.monotonic() - start
                 results.append(f"❌ **{label}** — {type(e).__name__} after {elapsed:.1f}s")
 
+        # 5th probe: same EA endpoint, but via curl_cffi impersonating a
+        # real Chrome TLS handshake instead of aiohttp's default one.
+        start = time.monotonic()
+        try:
+            from curl_cffi.requests import AsyncSession as CurlAsyncSession
+
+            async with CurlAsyncSession() as session:
+                resp = await session.get(
+                    ea_url,
+                    params=ea_params,
+                    headers={
+                        "Accept": "application/json, text/plain, */*",
+                        "Referer": "https://www.ea.com/",
+                        "Origin": "https://www.ea.com",
+                    },
+                    timeout=10,
+                    impersonate="chrome124",
+                )
+                elapsed = time.monotonic() - start
+                results.append(
+                    f"✅ **EA API, curl_cffi Chrome-TLS-impersonation** — HTTP {resp.status_code} in {elapsed:.1f}s\n`{resp.text[:150]}`"
+                )
+        except Exception as e:  # noqa: BLE001
+            elapsed = time.monotonic() - start
+            results.append(f"❌ **EA API, curl_cffi Chrome-TLS-impersonation** — {type(e).__name__} after {elapsed:.1f}s")
+
         if not settings.chelstats_proxy_url:
             results.append("\n⚠️ No `CHELSTATS_PROXY_URL` is currently set, so the proxy tests above were skipped (ran direct instead).")
 
