@@ -1,3 +1,4 @@
+
 """
 Thin async client around EA's real (undocumented, unofficial) Pro Clubs API.
 
@@ -41,6 +42,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from typing import Any, Optional
+from urllib.parse import urlsplit, urlunsplit
 
 import aiohttp
 from tenacity import retry, stop_after_attempt, wait_exponential
@@ -102,6 +104,25 @@ class ChelStatsError(RuntimeError):
     pass
 
 
+def _split_proxy_credentials(proxy_url: str) -> tuple[Optional[str], Optional[aiohttp.BasicAuth]]:
+    """aiohttp does not reliably pull username:password out of a proxy URL
+    the way some other HTTP libraries (e.g. requests) do -- it needs the
+    bare scheme://host:port passed as `proxy=` and the credentials passed
+    separately as `proxy_auth=aiohttp.BasicAuth(...)`. Without this split,
+    a proxy requiring auth can silently hang the connection waiting for
+    credentials that never arrive, which looks identical to a network
+    timeout -- this was the actual cause of continued timeouts even after
+    a working proxy URL was configured."""
+    if not proxy_url:
+        return None, None
+    parsed = urlsplit(proxy_url)
+    if not parsed.username:
+        return proxy_url, None
+    bare = urlunsplit((parsed.scheme, f"{parsed.hostname}:{parsed.port}", parsed.path, parsed.query, parsed.fragment))
+    auth = aiohttp.BasicAuth(login=parsed.username, password=parsed.password or "")
+    return bare, auth
+
+
 class ChelStatsClient:
     def __init__(self, base_url: Optional[str] = None, api_key: Optional[str] = None) -> None:
         self.base_url = (base_url or settings.chelstats_base_url).rstrip("/")
@@ -119,14 +140,16 @@ class ChelStatsClient:
         return headers
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
-
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
     async def _get(self, path: str, params: Optional[dict] = None) -> Any:
         url = f"{self.base_url}{path}"
-        proxy = settings.chelstats_proxy_url or None
+        proxy_url, proxy_auth = _split_proxy_credentials(settings.chelstats_proxy_url)
         async with aiohttp.ClientSession(headers=self._headers()) as session:
             async with session.get(
-                url, params=params, timeout=aiohttp.ClientTimeout(total=20), proxy=proxy
+                url,
+                params=params,
+                timeout=aiohttp.ClientTimeout(total=20),
+                proxy=proxy_url,
+                proxy_auth=proxy_auth,
             ) as resp:
                 if resp.status == 404:
                     return None
@@ -134,7 +157,7 @@ class ChelStatsClient:
                     body = await resp.text()
                     raise ChelStatsError(f"GET {url} -> {resp.status}: {body[:300]}")
                 return await resp.json()
-    
+
     async def get_recent_club_matches(self, club_id: int, limit: Optional[int] = None) -> list[MatchDetail]:
         """Fetch a club's recent match history -- EA's real API returns
         each match's FULL box score already, so this doubles as both
