@@ -131,14 +131,28 @@ class ChelStatsClient:
         self.match_type = settings.chelstats_match_type
 
     def _headers(self) -> dict:
-        # EA's servers reject requests without an ea.com Referer -- this is
-        # the single most common cause of a connection appearing to "not
-        # work" against this API.
-        headers = {"Accept": "application/json", "Referer": "https://www.ea.com"}
+        # EA's servers reject requests without an ea.com Referer, AND --
+        # more importantly -- aiohttp's default headers honestly announce
+        # this as a non-browser client (no User-Agent at all becomes
+        # "Python/3.x aiohttp/x.x"), which many anti-bot systems detect and
+        # silently drop the connection for rather than sending back an
+        # honest rejection. That looks identical to a network timeout,
+        # regardless of which IP the request comes from. Sending a normal
+        # desktop-browser User-Agent + the handful of headers a real
+        # browser always includes fixes this.
+        headers = {
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Referer": "https://www.ea.com/",
+            "Origin": "https://www.ea.com",
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+            ),
+        }
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
         return headers
-
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
     async def _get(self, path: str, params: Optional[dict] = None) -> Any:
         url = f"{self.base_url}{path}"
