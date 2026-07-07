@@ -119,17 +119,22 @@ class ChelStatsClient:
         return headers
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
+
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
     async def _get(self, path: str, params: Optional[dict] = None) -> Any:
         url = f"{self.base_url}{path}"
+        proxy = settings.chelstats_proxy_url or None
         async with aiohttp.ClientSession(headers=self._headers()) as session:
-            async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=20)) as resp:
+            async with session.get(
+                url, params=params, timeout=aiohttp.ClientTimeout(total=20), proxy=proxy
+            ) as resp:
                 if resp.status == 404:
                     return None
                 if resp.status >= 400:
                     body = await resp.text()
                     raise ChelStatsError(f"GET {url} -> {resp.status}: {body[:300]}")
                 return await resp.json()
-
+    
     async def get_recent_club_matches(self, club_id: int, limit: Optional[int] = None) -> list[MatchDetail]:
         """Fetch a club's recent match history -- EA's real API returns
         each match's FULL box score already, so this doubles as both
