@@ -28,17 +28,12 @@ INTENTS.members = True
 
 COGS = [
     "bot.cogs.admin",
-    "bot.cogs.season",
-    "bot.cogs.team",
-    "bot.cogs.player",
-    "bot.cogs.schedule",
-    "bot.cogs.game",
+    "bot.cogs.league",
     "bot.cogs.standings",
     "bot.cogs.leaders",
     "bot.cogs.awards",
     "bot.cogs.channel_updater",
 ]
-
 
 class NEHLBot(commands.Bot):
     def __init__(self):
