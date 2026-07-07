@@ -51,6 +51,20 @@ class Settings(BaseSettings):
             self.sync_database_url = _to_driver_url(self.database_url, "postgresql+psycopg2")
         return self
 
+
+    @model_validator(mode="after")
+    def _strip_chelstats_values(self) -> "Settings":
+        # A stray leading/trailing space copy-pasted into a Railway variable
+        # (invisible in the UI) turns "gameType5" into an EA-API-rejected
+        # value with no visible difference on screen. Strip everything
+        # defensively so this can't silently break /entergame again.
+        self.chelstats_base_url = self.chelstats_base_url.strip()
+        self.chelstats_platform = self.chelstats_platform.strip()
+        self.chelstats_match_type = self.chelstats_match_type.strip()
+        self.chelstats_api_key = self.chelstats_api_key.strip()
+        self.chelstats_proxy_url = self.chelstats_proxy_url.strip()
+        return self
+    
     # ChelStats
     chelstats_base_url: str = "https://proclubs.ea.com/api/nhl"
     chelstats_api_key: str = ""
