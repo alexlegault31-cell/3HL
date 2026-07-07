@@ -1,4 +1,3 @@
-
 """
 Per-game box score rows. These are what `/player gamelog` reads, and what
 `/game delete` must remove (along with reversing the aggregates they fed
@@ -30,6 +29,14 @@ class PlayerGameStat(Base, IDMixin, TimestampMixin):
     pim: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     shots: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     ppg: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    faceoffs_won: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    faceoffs_lost: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    takeaways: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    interceptions: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    blocked_shots: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    giveaways: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    pass_attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    passes_completed: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
     game: Mapped["Game"] = relationship()
     player: Mapped["Player"] = relationship()
@@ -76,4 +83,3 @@ class TeamGameStat(Base, IDMixin, TimestampMixin):
 
     game: Mapped["Game"] = relationship()
     team: Mapped["Team"] = relationship()
-
