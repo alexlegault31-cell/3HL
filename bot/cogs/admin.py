@@ -59,7 +59,16 @@ class AdminCog(commands.Cog):
         for label, url, params, proxy, auth in probes:
             start = time.monotonic()
             try:
-                headers = {"Accept": "application/json", "Referer": "https://www.ea.com"}
+                headers = {
+                    "Accept": "application/json, text/plain, */*",
+                    "Accept-Language": "en-US,en;q=0.9",
+                    "Referer": "https://www.ea.com/",
+                    "Origin": "https://www.ea.com",
+                    "User-Agent": (
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                        "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+                    ),
+                }
                 async with aiohttp.ClientSession(headers=headers) as session:
                     async with session.get(
                         url, params=params, proxy=proxy, proxy_auth=auth, timeout=aiohttp.ClientTimeout(total=10)
