@@ -1,4 +1,3 @@
-
 """
 Player identity vs. season-scoped stats vs. team membership are kept as
 three separate concepts:
@@ -89,6 +88,14 @@ class PlayerSeason(Base, IDMixin, TimestampMixin):
     pim: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     shots: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     ppg: Mapped[int] = mapped_column(Integer, default=0, nullable=False)  # power play goals
+    faceoffs_won: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    faceoffs_lost: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    takeaways: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    interceptions: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    blocked_shots: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    giveaways: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    pass_attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    passes_completed: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
     # --- Goalie totals ---
     wins: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
@@ -117,6 +124,18 @@ class PlayerSeason(Base, IDMixin, TimestampMixin):
             return 0.0
         return round(self.saves / self.shots_against, 3)
 
+    @property
+    def faceoff_pct(self) -> float:
+        total = self.faceoffs_won + self.faceoffs_lost
+        if total <= 0:
+            return 0.0
+        return round(self.faceoffs_won / total, 3)
+
+    @property
+    def pass_pct(self) -> float:
+        if self.pass_attempts <= 0:
+            return 0.0
+        return round(self.passes_completed / self.pass_attempts, 3)
+
     def __repr__(self) -> str:  # pragma: no cover
         return f"<PlayerSeason player_id={self.player_id} season_id={self.season_id} pts={self.points}>"
-
