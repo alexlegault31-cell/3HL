@@ -45,8 +45,19 @@ class AdminCog(commands.Cog):
         results = []
         test_site = "https://api.ipify.org?format=json"
         ea_url = "https://proclubs.ea.com/api/nhl/clubs/matches"
-        ea_params = {"clubIds": 2555, "platform": "common-gen5", "matchType": "gameType5"}
-
+        # Use the REAL configured values, not hardcoded ones -- otherwise
+        # this diagnostic can pass while the actual bot config is broken.
+        ea_params = {
+            "clubIds": 2555,
+            "platform": settings.chelstats_platform,
+            "matchType": settings.chelstats_match_type,
+        }
+        results.append(
+            f"🔧 Current config: platform=`{settings.chelstats_platform!r}` "
+            f"match_type=`{settings.chelstats_match_type!r}` "
+            f"(repr shown to reveal any hidden whitespace)"
+        )
+        
         proxy_url, proxy_auth = split_proxy_credentials(settings.chelstats_proxy_url)
 
         probes = [
