@@ -1,4 +1,3 @@
-
 """
 Queries backing `/leaders goals|assists|points|goalie`. Always season-
 scoped; "leaders" with no season specified means the currently active
@@ -99,3 +98,99 @@ async def goalie_leaders(session: AsyncSession, season_id: int, limit: int = 10)
         for i, (ps, p, t) in enumerate(scored[:limit])
     ]
 
+
+MIN_FACEOFFS_TAKEN = 20
+
+
+async def hits_leaders(session: AsyncSession, season_id: int, limit: int = 10) -> list[LeaderRow]:
+    stmt = (
+        select(PlayerSeason, Player, Team)
+        .join(Player, Player.id == PlayerSeason.player_id)
+        .outerjoin(Team, Team.id == PlayerSeason.team_id)
+        .where(PlayerSeason.season_id == season_id)
+        .order_by(PlayerSeason.hits.desc())
+        .limit(limit)
+    )
+    rows = (await session.execute(stmt)).all()
+    return [LeaderRow(rank=i + 1, player=p, team=t, value=ps.hits, secondary=f"{ps.games_played} GP") for i, (ps, p, t) in enumerate(rows)]
+
+
+async def pim_leaders(session: AsyncSession, season_id: int, limit: int = 10) -> list[LeaderRow]:
+    stmt = (
+        select(PlayerSeason, Player, Team)
+        .join(Player, Player.id == PlayerSeason.player_id)
+        .outerjoin(Team, Team.id == PlayerSeason.team_id)
+        .where(PlayerSeason.season_id == season_id)
+        .order_by(PlayerSeason.pim.desc())
+        .limit(limit)
+    )
+    rows = (await session.execute(stmt)).all()
+    return [LeaderRow(rank=i + 1, player=p, team=t, value=ps.pim, secondary=f"{ps.games_played} GP") for i, (ps, p, t) in enumerate(rows)]
+
+
+async def faceoff_pct_leaders(session: AsyncSession, season_id: int, limit: int = 10) -> list[LeaderRow]:
+    stmt = (
+        select(PlayerSeason, Player, Team)
+        .join(Player, Player.id == PlayerSeason.player_id)
+        .outerjoin(Team, Team.id == PlayerSeason.team_id)
+        .where(PlayerSeason.season_id == season_id)
+    )
+    rows = (await session.execute(stmt)).all()
+    qualified = [r for r in rows if (r[0].faceoffs_won + r[0].faceoffs_lost) >= MIN_FACEOFFS_TAKEN]
+    ranked = sorted(qualified, key=lambda r: -r[0].faceoff_pct)[:limit]
+    return [
+        LeaderRow(rank=i + 1, player=p, team=t, value=ps.faceoff_pct, secondary=f"{ps.faceoffs_won}-{ps.faceoffs_lost}")
+        for i, (ps, p, t) in enumerate(ranked)
+    ]
+
+
+async def takeaways_leaders(session: AsyncSession, season_id: int, limit: int = 10) -> list[LeaderRow]:
+    stmt = (
+        select(PlayerSeason, Player, Team)
+        .join(Player, Player.id == PlayerSeason.player_id)
+        .outerjoin(Team, Team.id == PlayerSeason.team_id)
+        .where(PlayerSeason.season_id == season_id)
+        .order_by(PlayerSeason.takeaways.desc())
+        .limit(limit)
+    )
+    rows = (await session.execute(stmt)).all()
+    return [LeaderRow(rank=i + 1, player=p, team=t, value=ps.takeaways, secondary=f"{ps.games_played} GP") for i, (ps, p, t) in enumerate(rows)]
+
+
+async def interceptions_leaders(session: AsyncSession, season_id: int, limit: int = 10) -> list[LeaderRow]:
+    stmt = (
+        select(PlayerSeason, Player, Team)
+        .join(Player, Player.id == PlayerSeason.player_id)
+        .outerjoin(Team, Team.id == PlayerSeason.team_id)
+        .where(PlayerSeason.season_id == season_id)
+        .order_by(PlayerSeason.interceptions.desc())
+        .limit(limit)
+    )
+    rows = (await session.execute(stmt)).all()
+    return [LeaderRow(rank=i + 1, player=p, team=t, value=ps.interceptions, secondary=f"{ps.games_played} GP") for i, (ps, p, t) in enumerate(rows)]
+
+
+async def blocked_shots_leaders(session: AsyncSession, season_id: int, limit: int = 10) -> list[LeaderRow]:
+    stmt = (
+        select(PlayerSeason, Player, Team)
+        .join(Player, Player.id == PlayerSeason.player_id)
+        .outerjoin(Team, Team.id == PlayerSeason.team_id)
+        .where(PlayerSeason.season_id == season_id)
+        .order_by(PlayerSeason.blocked_shots.desc())
+        .limit(limit)
+    )
+    rows = (await session.execute(stmt)).all()
+    return [LeaderRow(rank=i + 1, player=p, team=t, value=ps.blocked_shots, secondary=f"{ps.games_played} GP") for i, (ps, p, t) in enumerate(rows)]
+
+
+async def shutouts_leaders(session: AsyncSession, season_id: int, limit: int = 10) -> list[LeaderRow]:
+    stmt = (
+        select(PlayerSeason, Player, Team)
+        .join(Player, Player.id == PlayerSeason.player_id)
+        .outerjoin(Team, Team.id == PlayerSeason.team_id)
+        .where(PlayerSeason.season_id == season_id, Player.is_goalie.is_(True), PlayerSeason.shutouts > 0)
+        .order_by(PlayerSeason.shutouts.desc())
+        .limit(limit)
+    )
+    rows = (await session.execute(stmt)).all()
+    return [LeaderRow(rank=i + 1, player=p, team=t, value=ps.shutouts, secondary=f"{ps.wins}-{ps.losses}-{ps.ot_losses}") for i, (ps, p, t) in enumerate(rows)]
