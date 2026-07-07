@@ -1,3 +1,4 @@
+
 """
 The core import pipeline behind `/entergame <schedule_game_number>`.
 
@@ -86,16 +87,24 @@ async def import_game(
     home_ts = await _get_team_season(session, schedule.home_team_id, season_id)
     away_ts = await _get_team_season(session, schedule.away_team_id, season_id)
 
+    # Fetch these explicitly rather than via schedule.home_team/away_team --
+    # those are lazy-loaded relationships, and accessing them later (e.g.
+    # inside an f-string) outside of an awaited ORM call crashes with
+    # "MissingGreenlet" under the async engine. session.get() is a proper
+    # async-safe call, so doing it once up front avoids that entirely.
+    home_team_obj = await session.get(Team, schedule.home_team_id)
+    away_team_obj = await session.get(Team, schedule.away_team_id)
+
     if not home_ts.club_id:
-        raise ImportError_(f"{schedule.home_team.name} has no linked Club ID. Run `/team link-club` first.")
+        raise ImportError_(f"{home_team_obj.name} has no linked Club ID. Run `/team link-club` first.")
     if not away_ts.club_id:
-        raise ImportError_(f"{schedule.away_team.name} has no linked Club ID. Run `/team link-club` first.")
+        raise ImportError_(f"{away_team_obj.name} has no linked Club ID. Run `/team link-club` first.")
 
     match_detail = await _find_matching_match(client, home_ts.club_id, away_ts.club_id)
     if match_detail is None:
         raise ImportError_(
-            f"Couldn't find a recent EASHL match between {schedule.home_team.name} "
-            f"(Club {home_ts.club_id}) and {schedule.away_team.name} (Club {away_ts.club_id}). "
+            f"Couldn't find a recent EASHL match between {home_team_obj.name} "
+            f"(Club {home_ts.club_id}) and {away_team_obj.name} (Club {away_ts.club_id}). "
             f"Make sure the game has been played and try again in a few minutes."
         )
 
