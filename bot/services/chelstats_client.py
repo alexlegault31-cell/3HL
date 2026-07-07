@@ -1,4 +1,3 @@
-
 """
 Thin async client around EA's real (undocumented, unofficial) Pro Clubs API.
 
@@ -153,24 +152,50 @@ class ChelStatsClient:
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
         return headers
+
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
     async def _get(self, path: str, params: Optional[dict] = None) -> Any:
+        """Uses curl_cffi instead of aiohttp for this specific call.
+
+        Why: EA's API (or whatever protection sits in front of it, likely
+        Akamai) returns an instant "Access Denied" page even when headers
+        look exactly like a real Chrome browser's. That pattern points to
+        TLS fingerprinting -- the way a client shakes hands over HTTPS
+        (its "JA3/JA4 fingerprint") differs between Python's networking
+        stack and a real browser, regardless of what HTTP headers say.
+        curl_cffi wraps libcurl with the ability to impersonate a real
+        Chrome TLS handshake, which is what actually gets past this kind
+        of protection -- setting a Chrome User-Agent string alone (as
+        aiohttp was doing) is not enough.
+        """
+        from curl_cffi.requests import AsyncSession
+
         url = f"{self.base_url}{path}"
         proxy_url, proxy_auth = split_proxy_credentials(settings.chelstats_proxy_url)
-        async with aiohttp.ClientSession(headers=self._headers()) as session:
-            async with session.get(
+
+        proxies = None
+        if proxy_url:
+            if proxy_auth:
+                scheme, _, rest = proxy_url.partition("://")
+                proxies = {"http": f"{scheme}://{proxy_auth.login}:{proxy_auth.password}@{rest}",
+                           "https": f"{scheme}://{proxy_auth.login}:{proxy_auth.password}@{rest}"}
+            else:
+                proxies = {"http": proxy_url, "https": proxy_url}
+
+        async with AsyncSession() as session:
+            resp = await session.get(
                 url,
                 params=params,
-                timeout=aiohttp.ClientTimeout(total=20),
-                proxy=proxy_url,
-                proxy_auth=proxy_auth,
-            ) as resp:
-                if resp.status == 404:
-                    return None
-                if resp.status >= 400:
-                    body = await resp.text()
-                    raise ChelStatsError(f"GET {url} -> {resp.status}: {body[:300]}")
-                return await resp.json()
+                headers=self._headers(),
+                proxies=proxies,
+                timeout=20,
+                impersonate="chrome124",
+            )
+            if resp.status_code == 404:
+                return None
+            if resp.status_code >= 400:
+                raise ChelStatsError(f"GET {url} -> {resp.status_code}: {resp.text[:300]}")
+            return resp.json()
 
     async def get_recent_club_matches(self, club_id: int, limit: Optional[int] = None) -> list[MatchDetail]:
         """Fetch a club's recent match history -- EA's real API returns
