@@ -56,7 +56,12 @@ class Settings(BaseSettings):
     chelstats_api_key: str = ""
     chelstats_match_lookback: int = 20
     chelstats_platform: str = "common-gen5"
-    chelstats_match_type: str = "club_private"
+    chelstats_match_type: str = "gameType5"
+
+    # Optional: route EA API calls through a residential proxy if Railway's
+    # (or any cloud host's) IP gets silently blocked. Format:
+    # http://username:password@proxy-host:port -- leave blank to disable.
+    chelstats_proxy_url: str = ""
 
     # AI Recaps
     openai_api_key: str = ""
