@@ -1,4 +1,3 @@
-
 """
 The core import pipeline behind `/entergame <schedule_game_number>`.
 
@@ -215,6 +214,14 @@ async def import_game(
                 pim=box.pim,
                 shots=box.shots,
                 ppg=box.ppg,
+                faceoffs_won=box.faceoffs_won,
+                faceoffs_lost=box.faceoffs_lost,
+                takeaways=box.takeaways,
+                interceptions=box.interceptions,
+                blocked_shots=box.blocked_shots,
+                giveaways=box.giveaways,
+                pass_attempts=box.pass_attempts,
+                passes_completed=box.passes_completed,
             )
             session.add(line)
             player_lines.append(line)
@@ -261,6 +268,14 @@ async def reverse_game(session: AsyncSession, game: Game) -> None:
             ps.pim -= line.pim
             ps.shots -= line.shots
             ps.ppg -= line.ppg
+            ps.faceoffs_won -= line.faceoffs_won
+            ps.faceoffs_lost -= line.faceoffs_lost
+            ps.takeaways -= line.takeaways
+            ps.interceptions -= line.interceptions
+            ps.blocked_shots -= line.blocked_shots
+            ps.giveaways -= line.giveaways
+            ps.pass_attempts -= line.pass_attempts
+            ps.passes_completed -= line.passes_completed
 
     for line in goalie_lines:
         ps = await _get_player_season(session, line.player_id, line.season_id)
@@ -379,6 +394,14 @@ async def _apply_skater_season_delta(session: AsyncSession, player_id: int, seas
     ps.pim += line.pim
     ps.shots += line.shots
     ps.ppg += line.ppg
+    ps.faceoffs_won += line.faceoffs_won
+    ps.faceoffs_lost += line.faceoffs_lost
+    ps.takeaways += line.takeaways
+    ps.interceptions += line.interceptions
+    ps.blocked_shots += line.blocked_shots
+    ps.giveaways += line.giveaways
+    ps.pass_attempts += line.pass_attempts
+    ps.passes_completed += line.passes_completed
 
 
 async def _apply_goalie_season_delta(session: AsyncSession, player_id: int, season_id: int, team_id: int, line: GoalieGameStat) -> None:
