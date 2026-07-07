@@ -66,6 +66,14 @@ class PlayerBoxScore:
     pim: int = 0
     shots: int = 0
     ppg: int = 0
+    faceoffs_won: int = 0
+    faceoffs_lost: int = 0
+    takeaways: int = 0
+    interceptions: int = 0
+    blocked_shots: int = 0
+    giveaways: int = 0
+    pass_attempts: int = 0
+    passes_completed: int = 0
 
     # goalie fields
     shots_against: int = 0
@@ -287,6 +295,14 @@ class ChelStatsClient:
                         pim=pim,
                         shots=int(p.get("skshots", 0) or 0),
                         ppg=int(p.get("skppg", 0) or 0),
+                        faceoffs_won=int(p.get("skfow", 0) or 0),
+                        faceoffs_lost=int(p.get("skfol", 0) or 0),
+                        takeaways=int(p.get("sktakeaways", 0) or 0),
+                        interceptions=int(p.get("skinterceptions", 0) or 0),
+                        blocked_shots=int(p.get("skbs", 0) or 0),
+                        giveaways=int(p.get("skgiveaways", 0) or 0),
+                        pass_attempts=int(p.get("skpassattempts", 0) or 0),
+                        passes_completed=int(p.get("skpasses", 0) or 0),
                         shots_against=shots_against,
                         saves=int(p.get("glsaves", 0) or 0),
                         goals_against=int(p.get("glga", 0) or 0),
@@ -403,6 +419,14 @@ def combine_matches(matches: list[MatchDetail]) -> MatchDetail:
             existing.pim += p.pim
             existing.shots += p.shots
             existing.ppg += p.ppg
+            existing.faceoffs_won += p.faceoffs_won
+            existing.faceoffs_lost += p.faceoffs_lost
+            existing.takeaways += p.takeaways
+            existing.interceptions += p.interceptions
+            existing.blocked_shots += p.blocked_shots
+            existing.giveaways += p.giveaways
+            existing.pass_attempts += p.pass_attempts
+            existing.passes_completed += p.passes_completed
             existing.shots_against += p.shots_against
             existing.saves += p.saves
             existing.goals_against += p.goals_against
