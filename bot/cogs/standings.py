@@ -1,4 +1,3 @@
-
 """`/standings` — the most frequently used read command. Posts the table as
 text (always) and offers the graphic table on demand via /standings graphic."""
 from __future__ import annotations
@@ -39,7 +38,7 @@ class StandingsCog(commands.Cog):
             rows = [(e, await session.get(Team, e.team_id)) for e in entries]
 
             if graphic:
-                path = render_standings(s.name, rows)
+                path = await render_standings(s.name, rows)
                 await interaction.followup.send(file=discord.File(path))
                 return
 
@@ -52,4 +51,3 @@ class StandingsCog(commands.Cog):
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(StandingsCog(bot))
-
