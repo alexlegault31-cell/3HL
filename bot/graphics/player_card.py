@@ -1,18 +1,19 @@
-
-"""Renders a player profile / season stats card for /player card."""
+"""Renders a player profile / season stats card for /league player stats."""
 from __future__ import annotations
 
 import uuid
 
 from PIL import Image, ImageDraw
 
+from bot.graphics.logo_fetch import get_team_logo
 from bot.graphics.theme import GENERATED_DIR, Theme, load_font
 from bot.models import Player, PlayerSeason, Team
 
 WIDTH, HEIGHT = 760, 420
+LOGO_SIZE = 64
 
 
-def render_player_card(player: Player, season: PlayerSeason, team: Team | None, season_label: str) -> str:
+async def render_player_card(player: Player, season: PlayerSeason, team: Team | None, season_label: str) -> str:
     img = Image.new("RGB", (WIDTH, HEIGHT), Theme.BG_DARK)
     draw = ImageDraw.Draw(img)
 
@@ -24,15 +25,24 @@ def render_player_card(player: Player, season: PlayerSeason, team: Team | None, 
     sub_font = load_font("Regular", 20)
     stat_label_font = load_font("Bold", 16)
     stat_val_font = load_font("Black", 34)
+    role_font = load_font("Bold", 14)
 
     draw.text((56, 58), player.gamertag, font=name_font, fill=Theme.TEXT_PRIMARY)
     team_line = f"{team.name} • {season_label}" if team else season_label
     draw.text((58, 108), team_line, font=sub_font, fill=Theme.TEXT_SECONDARY)
+
+    logo = await get_team_logo(team.logo_url if team else None, (LOGO_SIZE, LOGO_SIZE))
+    if logo is not None:
+        img.paste(logo, (WIDTH - 56 - LOGO_SIZE, 50), logo.split()[-1])
+    else:
+        # Fallback: the original colored circle with a role-letter badge
+        draw.ellipse([(WIDTH - 110, 58), (WIDTH - 56, 112)], fill=accent)
+        role_letter = "G" if player.is_goalie else "S"
+        rw = draw.textlength(role_letter, font=role_font)
+        draw.text((WIDTH - 110 + (54 - rw) / 2, 70), role_letter, font=role_font, fill=(10, 10, 10))
+
     role = "Goalie" if player.is_goalie else "Skater"
-    draw.ellipse([(WIDTH - 110, 58), (WIDTH - 56, 112)], fill=accent)
-    role_font = load_font("Bold", 14)
-    rw = draw.textlength(role[0], font=role_font)
-    draw.text((WIDTH - 110 + (54 - rw) / 2, 70), role[0], font=role_font, fill=(10, 10, 10))
+    draw.text((58, 134), role, font=role_font, fill=Theme.TEXT_MUTED)
 
     if player.is_goalie:
         stats = [
@@ -65,4 +75,3 @@ def render_player_card(player: Player, season: PlayerSeason, team: Team | None, 
     out_path = GENERATED_DIR / f"player_{player.id}_{uuid.uuid4().hex[:8]}.png"
     img.save(out_path)
     return str(out_path)
-
