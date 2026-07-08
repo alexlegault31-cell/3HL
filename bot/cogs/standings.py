@@ -1,5 +1,5 @@
-"""`/standings` — the most frequently used read command. Posts the table as
-text (always) and offers the graphic table on demand via /standings graphic."""
+"""`/standings` -- always posts the visual standings graphic (no text
+mode), including the league-wide logo set via /league admin add-logo."""
 from __future__ import annotations
 
 import discord
@@ -10,6 +10,7 @@ from sqlalchemy import select
 from bot.database import get_session
 from bot.graphics.standings_graphic import render_standings
 from bot.models import StandingsEntry, Team
+from bot.services.league_settings import get_league_logo_url
 from bot.services.season_service import SeasonNotFound, resolve_season
 from bot.utils.embeds import error_embed, info_embed
 
@@ -19,8 +20,8 @@ class StandingsCog(commands.Cog):
         self.bot = bot
 
     @app_commands.command(name="standings", description="View the league standings")
-    @app_commands.describe(season="Season number (defaults to active)", graphic="Post the visual standings graphic instead of text")
-    async def standings(self, interaction: discord.Interaction, season: int | None = None, graphic: bool = False):
+    @app_commands.describe(season="Season number (defaults to active)")
+    async def standings(self, interaction: discord.Interaction, season: int | None = None):
         await interaction.response.defer()
         async with get_session() as session:
             try:
@@ -36,17 +37,10 @@ class StandingsCog(commands.Cog):
                 return
 
             rows = [(e, await session.get(Team, e.team_id)) for e in entries]
+            league_logo_url = await get_league_logo_url(session, interaction.guild_id)
+            path = await render_standings(s.name, rows, league_logo_url)
 
-            if graphic:
-                path = await render_standings(s.name, rows)
-                await interaction.followup.send(file=discord.File(path))
-                return
-
-            lines = [
-                f"`{e.rank:>2}` **{t.name}** — {e.wins}-{e.losses}-{e.ot_losses} ({e.points} pts) GF {e.goals_for} GA {e.goals_against} DIFF {e.goal_diff:+d} {e.streak}"
-                for e, t in rows
-            ]
-        await interaction.followup.send(embed=info_embed(f"Standings — {s.name}", "\n".join(lines)))
+        await interaction.followup.send(file=discord.File(path))
 
 
 async def setup(bot: commands.Bot):
