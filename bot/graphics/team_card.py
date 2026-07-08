@@ -68,7 +68,7 @@ async def render_team_card(team: Team, team_season: TeamSeason, season_label: st
     return str(out_path)
 
 
-async def render_leaders_board(title: str, season_label: str, rows: Sequence[LeaderRow]) -> str:
+async def render_leaders_board(title: str, season_label: str, rows: Sequence[LeaderRow], league_logo_url: str | None = None) -> str:
     width = 760
     row_h = 54
     header_h = 120
@@ -85,6 +85,11 @@ async def render_leaders_board(title: str, season_label: str, rows: Sequence[Lea
 
     draw.text((40, 24), title.upper(), font=title_font, fill=Theme.TEXT_PRIMARY)
     draw.text((40, 66), season_label, font=sub_font, fill=Theme.TEXT_SECONDARY)
+
+    league_logo = await get_team_logo(league_logo_url, (56, 56))
+    if league_logo is not None:
+        img.paste(league_logo, (width - 40 - 56, 20), league_logo.split()[-1])
+
     draw.line([(40, header_h - 6), (width - 40, header_h - 6)], fill=Theme.BORDER, width=2)
 
     y = header_h + 6
