@@ -1,4 +1,3 @@
-
 """Renders the final-score graphic posted to #game-results after every
 /entergame import or recorded forfeit."""
 from __future__ import annotations
@@ -7,13 +6,15 @@ import uuid
 
 from PIL import Image, ImageDraw
 
+from bot.graphics.logo_fetch import get_team_logo
 from bot.graphics.theme import GENERATED_DIR, Theme, load_font
 from bot.models import Game, Team
 
 WIDTH, HEIGHT = 1000, 460
+CORNER_LOGO_SIZE = 56
 
 
-def render_game_result(game: Game, home_team: Team, away_team: Team) -> str:
+async def render_game_result(game: Game, home_team: Team, away_team: Team) -> str:
     img = Image.new("RGB", (WIDTH, HEIGHT), Theme.BG_DARK)
     draw = ImageDraw.Draw(img)
 
@@ -23,6 +24,16 @@ def render_game_result(game: Game, home_team: Team, away_team: Team) -> str:
     # Side panels with each team's color, fading toward center.
     draw.rectangle([(0, 0), (WIDTH // 2, 14)], fill=home_color)
     draw.rectangle([(WIDTH // 2, 0), (WIDTH, 14)], fill=away_color)
+
+    # Real club crests in the top corners, matching the reference bot's
+    # layout -- falls back to nothing extra (the colored side panel above
+    # already carries the team's brand color) if no logo is set.
+    home_logo = await get_team_logo(home_team.logo_url, (CORNER_LOGO_SIZE, CORNER_LOGO_SIZE))
+    if home_logo is not None:
+        img.paste(home_logo, (18, 18), home_logo.split()[-1])
+    away_logo = await get_team_logo(away_team.logo_url, (CORNER_LOGO_SIZE, CORNER_LOGO_SIZE))
+    if away_logo is not None:
+        img.paste(away_logo, (WIDTH - 18 - CORNER_LOGO_SIZE, 18), away_logo.split()[-1])
 
     label_font = load_font("Bold", 26)
     name_font = load_font("Black", 46)
@@ -55,7 +66,7 @@ def render_game_result(game: Game, home_team: Team, away_team: Team) -> str:
     else:
         _draw_badge(draw, WIDTH - 60 - 28, 110, "W", Theme.WIN_GREEN, right_align=True)
 
-    footer = "EASHL Match Imported via ChelStats"
+    footer = "EASHL Match Imported via EA Pro Clubs"
     draw.text((60, HEIGHT - 50), footer, font=meta_font, fill=Theme.TEXT_MUTED)
 
     out_path = GENERATED_DIR / f"result_{uuid.uuid4().hex[:10]}.png"
@@ -70,4 +81,3 @@ def _draw_badge(draw: ImageDraw.ImageDraw, x: int, y: int, text: str, color, rig
     x0 = x - w if right_align else x
     draw.rounded_rectangle([(x0, y), (x0 + w, y + 26)], radius=6, fill=color)
     draw.text((x0 + pad, y + 4), text, font=font, fill=(10, 10, 10))
-
