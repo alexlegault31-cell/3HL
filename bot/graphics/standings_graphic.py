@@ -1,4 +1,3 @@
-
 """Renders the full league standings table as a PNG, for #standings."""
 from __future__ import annotations
 
@@ -7,11 +6,13 @@ from typing import Sequence
 
 from PIL import Image, ImageDraw
 
+from bot.graphics.logo_fetch import get_team_logo
 from bot.graphics.theme import GENERATED_DIR, Theme, load_font
 from bot.models import StandingsEntry, Team
 
 ROW_H = 56
 HEADER_H = 110
+LOGO_SIZE = 32
 COL_X = {
     "rank": 40,
     "team": 100,
@@ -28,7 +29,7 @@ COL_X = {
 WIDTH = 1240
 
 
-def render_standings(
+async def render_standings(
     season_label: str,
     rows: Sequence[tuple[StandingsEntry, Team]],
 ) -> str:
@@ -69,8 +70,13 @@ def render_standings(
         rank_color = Theme.GOLD if entry.rank == 1 else Theme.TEXT_PRIMARY
         draw.text((COL_X["rank"], y), str(entry.rank), font=rank_font, fill=rank_color)
 
-        color_dot = Theme.team_color(team)
-        draw.ellipse([(COL_X["team"] - 28, y + 4), (COL_X["team"] - 8, y + 24)], fill=color_dot)
+        logo = await get_team_logo(team.logo_url, (LOGO_SIZE, LOGO_SIZE))
+        logo_x, logo_y = COL_X["team"] - 40, y + (ROW_H - LOGO_SIZE) // 2 - 14
+        if logo is not None:
+            img.paste(logo, (logo_x, logo_y), logo.split()[-1])
+        else:
+            color_dot = Theme.team_color(team)
+            draw.ellipse([(COL_X["team"] - 28, y + 4), (COL_X["team"] - 8, y + 24)], fill=color_dot)
         draw.text((COL_X["team"], y), team.name, font=row_font, fill=Theme.TEXT_PRIMARY)
 
         gp = entry.wins + entry.losses + entry.ot_losses
@@ -92,4 +98,3 @@ def render_standings(
     out_path = GENERATED_DIR / f"standings_{uuid.uuid4().hex[:10]}.png"
     img.save(out_path)
     return str(out_path)
-
