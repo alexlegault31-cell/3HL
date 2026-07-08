@@ -46,6 +46,7 @@ from bot.models import (
 )
 from bot.models.schedule import ScheduleStatus
 from bot.services.leaders_service import goals_leaders, points_leaders
+from bot.services.league_settings import get_league_logo_url
 from bot.services.recap_generator import RecapContext, format_top_performers, generate_recap
 from bot.services.season_service import SeasonNotFound, resolve_season, set_active_season
 from bot.services.stat_importer import ImportError_, apply_team_season_delta, import_game, reverse_game
@@ -508,7 +509,8 @@ class LeagueCog(commands.Cog):
                 return
 
             recap_text = await self._generate_and_attach_recap(session, result.game, result.home_team, result.away_team)
-            graphic_path = await render_game_result(result.game, result.home_team, result.away_team)
+            league_logo_url = await get_league_logo_url(session, interaction.guild_id)
+            graphic_path = await render_game_result(result.game, result.home_team, result.away_team, league_logo_url)
             result.game.result_graphic_path = graphic_path
             await refresh_all_channels(interaction.client, session)
 
@@ -599,7 +601,8 @@ class LeagueCog(commands.Cog):
             await session.flush()
             await recompute_standings(session, s.id)
             await refresh_all_channels(interaction.client, session)
-            graphic_path = await render_game_result(game, win_team, lose_team)
+            league_logo_url = await get_league_logo_url(session, interaction.guild_id)
+            graphic_path = await render_game_result(game, win_team, lose_team, league_logo_url)
 
         embed = success_embed("Forfeit recorded", f"**{win_team.name}** defeats **{lose_team.name}** {win_score}-{lose_score} by forfeit.\n*Reason: {reason}*")
         await interaction.response.send_message(embed=embed, file=discord.File(graphic_path))
@@ -643,7 +646,7 @@ class LeagueCog(commands.Cog):
                 await interaction.followup.send(embed=info_embed("No standings", f"No games played yet in {s.name}."))
                 return
             rows = [(e, await session.get(Team, e.team_id)) for e in entries]
-            path = await render_standings(s.name, rows)
+            path = await render_standings(s.name, rows, await get_league_logo_url(session, interaction.guild_id))
             await refresh_all_channels(interaction.client, session)
         await interaction.followup.send(file=discord.File(path))
 
@@ -661,7 +664,7 @@ class LeagueCog(commands.Cog):
             if not rows:
                 await interaction.followup.send(embed=info_embed("No data", f"No stat data for {s.name} yet."))
                 return
-            path = await render_leaders_board("Points Leaders", s.name, rows)
+            path = await render_leaders_board("Points Leaders", s.name, rows, await get_league_logo_url(session, interaction.guild_id))
             await refresh_all_channels(interaction.client, session)
         await interaction.followup.send(file=discord.File(path))
 
@@ -683,7 +686,7 @@ class LeagueCog(commands.Cog):
             game = await session.get(Game, schedule.game_id)
             home_team = await session.get(Team, game.home_team_id)
             away_team = await session.get(Team, game.away_team_id)
-            path = await render_game_result(game, home_team, away_team)
+            path = await render_game_result(game, home_team, away_team, await get_league_logo_url(session, interaction.guild_id))
             embed = info_embed(f"{home_team.name} {game.home_score} - {game.away_score} {away_team.name}", game.recap_text or "")
         await interaction.followup.send(embed=embed, file=discord.File(path))
 
