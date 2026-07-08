@@ -45,7 +45,7 @@ async def refresh_standings_channel(bot: commands.Bot, session: AsyncSession) ->
         return
 
     rows = [(e, await session.get(Team, e.team_id)) for e in entries]
-    path = render_standings(season.name, rows)
+    path = await render_standings(season.name, rows)
     await _post_or_edit(bot, session, settings.channel_standings, "standings", file_path=path)
 
 
@@ -61,7 +61,7 @@ async def refresh_leaders_channel(bot: commands.Bot, session: AsyncSession) -> N
     if not rows:
         return
 
-    path = render_leaders_board("Points Leaders", season.name, rows)
+    path = await render_leaders_board("Points Leaders", season.name, rows)
     await _post_or_edit(bot, session, settings.channel_stat_leaders, "leaders", file_path=path)
 
 
