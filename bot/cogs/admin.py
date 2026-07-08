@@ -13,7 +13,7 @@ from discord.ext import commands
 from bot.config import settings
 from bot.services.chelstats_client import split_proxy_credentials
 from bot.utils.checks import commissioner_only
-from bot.utils.embeds import error_embed, info_embed
+from bot.utils.embeds import error_embed, info_embed, success_embed
 
 log = logging.getLogger(__name__)
 
@@ -57,7 +57,7 @@ class AdminCog(commands.Cog):
             f"match_type=`{settings.chelstats_match_type!r}` "
             f"(repr shown to reveal any hidden whitespace)"
         )
-        
+
         proxy_url, proxy_auth = split_proxy_credentials(settings.chelstats_proxy_url)
 
         probes = [
@@ -121,6 +121,70 @@ class AdminCog(commands.Cog):
             results.append("\n⚠️ No `CHELSTATS_PROXY_URL` is currently set, so the proxy tests above were skipped (ran direct instead).")
 
         await interaction.followup.send(embed=info_embed("Network Diagnostic", "\n\n".join(results)), ephemeral=True)
+
+    @app_commands.command(name="test-logo-url", description="Check whether a logo URL will actually load on graphics")
+    @app_commands.describe(url="The exact image URL to test")
+    @commissioner_only()
+    async def test_logo_url(self, interaction: discord.Interaction, url: str):
+        await interaction.response.defer(ephemeral=True)
+
+        import io
+
+        from PIL import Image
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=8)) as resp:
+                    content_type = resp.headers.get("Content-Type", "unknown")
+                    status = resp.status
+                    data = await resp.read()
+        except Exception as e:  # noqa: BLE001
+            await interaction.followup.send(
+                embed=error_embed("Couldn't reach that URL", f"{type(e).__name__}: the request itself failed before getting any response."),
+                ephemeral=True,
+            )
+            return
+
+        if status != 200:
+            await interaction.followup.send(
+                embed=error_embed(
+                    "Not an image (bad status)",
+                    f"Server responded with HTTP {status}, Content-Type: `{content_type}`.\n"
+                    f"This usually means the link is wrong, private, or requires login.",
+                ),
+                ephemeral=True,
+            )
+            return
+
+        try:
+            img = Image.open(io.BytesIO(data))
+            img.verify()
+            img = Image.open(io.BytesIO(data))
+            width, height = img.size
+            fmt = img.format
+        except Exception:
+            preview = data[:200].decode("utf-8", errors="replace")
+            await interaction.followup.send(
+                embed=error_embed(
+                    "This URL is not a valid image",
+                    f"HTTP {status} succeeded, but the content isn't a real image file (Content-Type was `{content_type}`).\n\n"
+                    f"This is the classic symptom of a **webpage link instead of a direct image link** -- "
+                    f"e.g. an Imgur *page* (imgur.com/abc123) instead of the direct image (i.imgur.com/abc123.png).\n\n"
+                    f"First 200 characters of what was actually returned:\n```{preview}```",
+                ),
+                ephemeral=True,
+            )
+            return
+
+        await interaction.followup.send(
+            embed=success_embed(
+                "Valid image!",
+                f"Format: **{fmt}**, size: **{width}x{height}px**.\n"
+                f"This URL should work correctly on graphics. If it's still not showing up, "
+                f"double check it was saved with `/league admin add-logo` or `/league club add-logo` correctly.",
+            ),
+            ephemeral=True,
+        )
 
 
 async def setup(bot: commands.Bot):
