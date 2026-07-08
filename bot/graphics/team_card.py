@@ -1,6 +1,5 @@
-
-"""Renders team profile cards (/team card) and weekly/leaders boards
-(/leaders ...)."""
+"""Renders team profile cards (/league club stats) and stat leader boards
+(/leaders ...), with real club crests where available."""
 from __future__ import annotations
 
 import uuid
@@ -8,14 +7,17 @@ from typing import Sequence
 
 from PIL import Image, ImageDraw
 
+from bot.graphics.logo_fetch import get_team_logo
 from bot.graphics.theme import GENERATED_DIR, Theme, load_font
 from bot.models import Team, TeamSeason
 from bot.services.leaders_service import LeaderRow
 
 WIDTH, HEIGHT = 760, 420
+CARD_LOGO_SIZE = 64
+ROW_LOGO_SIZE = 28
 
 
-def render_team_card(team: Team, team_season: TeamSeason, season_label: str, leaders_lines: list[str]) -> str:
+async def render_team_card(team: Team, team_season: TeamSeason, season_label: str, leaders_lines: list[str]) -> str:
     img = Image.new("RGB", (WIDTH, HEIGHT), Theme.BG_DARK)
     draw = ImageDraw.Draw(img)
 
@@ -29,8 +31,13 @@ def render_team_card(team: Team, team_season: TeamSeason, season_label: str, lea
     stat_val_font = load_font("Black", 34)
     leader_font = load_font("Regular", 18)
 
-    draw.text((56, 58), team.name, font=name_font, fill=Theme.TEXT_PRIMARY)
-    draw.text((58, 108), season_label, font=sub_font, fill=Theme.TEXT_SECONDARY)
+    logo = await get_team_logo(team.logo_url, (CARD_LOGO_SIZE, CARD_LOGO_SIZE))
+    name_x = 56
+    if logo is not None:
+        img.paste(logo, (WIDTH - 56 - CARD_LOGO_SIZE, 40), logo.split()[-1])
+
+    draw.text((name_x, 58), team.name, font=name_font, fill=Theme.TEXT_PRIMARY)
+    draw.text((name_x + 2, 108), season_label, font=sub_font, fill=Theme.TEXT_SECONDARY)
 
     stats = [
         ("RECORD", f"{team_season.wins}-{team_season.losses}-{team_season.ot_losses}"),
@@ -61,7 +68,7 @@ def render_team_card(team: Team, team_season: TeamSeason, season_label: str, lea
     return str(out_path)
 
 
-def render_leaders_board(title: str, season_label: str, rows: Sequence[LeaderRow]) -> str:
+async def render_leaders_board(title: str, season_label: str, rows: Sequence[LeaderRow]) -> str:
     width = 760
     row_h = 54
     header_h = 120
@@ -90,11 +97,18 @@ def render_leaders_board(title: str, season_label: str, rows: Sequence[LeaderRow
         else:
             draw.text((48, y + 10), str(row.rank), font=rank_font, fill=Theme.TEXT_MUTED)
 
+        name_x = 96
+        if row.team is not None:
+            logo = await get_team_logo(row.team.logo_url, (ROW_LOGO_SIZE, ROW_LOGO_SIZE))
+            if logo is not None:
+                img.paste(logo, (name_x, y + 12), logo.split()[-1])
+                name_x += ROW_LOGO_SIZE + 10
+
         name = row.player.gamertag
         team_suffix = f"  ·  {row.team.name}" if row.team else ""
-        draw.text((96, y + 6), name, font=row_font, fill=Theme.TEXT_PRIMARY)
+        draw.text((name_x, y + 6), name, font=row_font, fill=Theme.TEXT_PRIMARY)
         name_w = draw.textlength(name, font=row_font)
-        draw.text((96 + name_w, y + 9), team_suffix, font=sec_font, fill=Theme.TEXT_MUTED)
+        draw.text((name_x + name_w, y + 9), team_suffix, font=sec_font, fill=Theme.TEXT_MUTED)
 
         val_str = str(row.value) if isinstance(row.value, int) else f"{row.value:.3f}".lstrip("0")
         val_w = draw.textlength(val_str, font=val_font)
@@ -108,4 +122,3 @@ def render_leaders_board(title: str, season_label: str, rows: Sequence[LeaderRow
     out_path = GENERATED_DIR / f"leaders_{uuid.uuid4().hex[:8]}.png"
     img.save(out_path)
     return str(out_path)
-
