@@ -24,6 +24,7 @@ from bot.services.leaders_service import (
     shutouts_leaders,
     takeaways_leaders,
 )
+from bot.services.league_settings import get_league_logo_url
 from bot.services.season_service import SeasonNotFound, resolve_season
 from bot.utils.embeds import error_embed, info_embed
 
@@ -73,7 +74,7 @@ class LeadersCog(commands.Cog):
                 await interaction.followup.send(embed=info_embed("No data", f"No {category} data for {s.name} yet."))
                 return
 
-            path = render_leaders_board(title, s.name, rows)
+            path = await render_leaders_board(title, s.name, rows, await get_league_logo_url(session, interaction.guild_id))
 
         await interaction.followup.send(file=discord.File(path))
 
