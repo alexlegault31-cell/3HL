@@ -23,6 +23,7 @@ from bot.graphics.standings_graphic import render_standings
 from bot.graphics.team_card import render_leaders_board
 from bot.models import GuildSetting, StandingsEntry, Team
 from bot.services.leaders_service import points_leaders
+from bot.services.league_settings import get_league_logo_url
 from bot.services.season_service import SeasonNotFound, get_active_season
 
 log = logging.getLogger(__name__)
@@ -44,8 +45,11 @@ async def refresh_standings_channel(bot: commands.Bot, session: AsyncSession) ->
     if not entries:
         return
 
+    channel = bot.get_channel(settings.channel_standings)
+    league_logo_url = await get_league_logo_url(session, channel.guild.id) if channel else None
+
     rows = [(e, await session.get(Team, e.team_id)) for e in entries]
-    path = await render_standings(season.name, rows)
+    path = await render_standings(season.name, rows, league_logo_url)
     await _post_or_edit(bot, session, settings.channel_standings, "standings", file_path=path)
 
 
@@ -61,7 +65,10 @@ async def refresh_leaders_channel(bot: commands.Bot, session: AsyncSession) -> N
     if not rows:
         return
 
-    path = await render_leaders_board("Points Leaders", season.name, rows)
+    channel = bot.get_channel(settings.channel_stat_leaders)
+    league_logo_url = await get_league_logo_url(session, channel.guild.id) if channel else None
+
+    path = await render_leaders_board("Points Leaders", season.name, rows, league_logo_url)
     await _post_or_edit(bot, session, settings.channel_stat_leaders, "leaders", file_path=path)
 
 
