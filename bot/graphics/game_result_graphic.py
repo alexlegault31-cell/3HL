@@ -14,7 +14,7 @@ WIDTH, HEIGHT = 1000, 460
 CORNER_LOGO_SIZE = 56
 
 
-async def render_game_result(game: Game, home_team: Team, away_team: Team) -> str:
+async def render_game_result(game: Game, home_team: Team, away_team: Team, league_logo_url: str | None = None) -> str:
     img = Image.new("RGB", (WIDTH, HEIGHT), Theme.BG_DARK)
     draw = ImageDraw.Draw(img)
 
@@ -34,6 +34,12 @@ async def render_game_result(game: Game, home_team: Team, away_team: Team) -> st
     away_logo = await get_team_logo(away_team.logo_url, (CORNER_LOGO_SIZE, CORNER_LOGO_SIZE))
     if away_logo is not None:
         img.paste(away_logo, (WIDTH - 18 - CORNER_LOGO_SIZE, 18), away_logo.split()[-1])
+
+    # League-wide logo (set via /league admin add-logo), small and
+    # centered so it sits between the two team crests without colliding.
+    league_logo = await get_team_logo(league_logo_url, (40, 40))
+    if league_logo is not None:
+        img.paste(league_logo, (WIDTH // 2 - 20, 18), league_logo.split()[-1])
 
     label_font = load_font("Bold", 26)
     name_font = load_font("Black", 46)
