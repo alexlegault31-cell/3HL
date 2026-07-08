@@ -32,6 +32,7 @@ WIDTH = 1240
 async def render_standings(
     season_label: str,
     rows: Sequence[tuple[StandingsEntry, Team]],
+    league_logo_url: str | None = None,
 ) -> str:
     height = HEADER_H + ROW_H * (len(rows) + 1) + 40
     img = Image.new("RGB", (WIDTH, height), Theme.BG_DARK)
@@ -45,6 +46,10 @@ async def render_standings(
 
     draw.text((40, 24), "LEAGUE STANDINGS", font=title_font, fill=Theme.TEXT_PRIMARY)
     draw.text((40, 70), season_label, font=sub_font, fill=Theme.TEXT_SECONDARY)
+
+    league_logo = await get_team_logo(league_logo_url, (64, 64))
+    if league_logo is not None:
+        img.paste(league_logo, (WIDTH - 40 - 64, 24), league_logo.split()[-1])
 
     header_y = HEADER_H - 4
     for key, label in [
