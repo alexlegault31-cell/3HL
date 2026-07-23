@@ -3,9 +3,6 @@ Consolidated `/league` command tree: `/league season`, `/league club`,
 `/league player`, `/league list`, `/league admin`, `/league refresh`,
 `/league schedule`, plus top-level `/league postpone-game`,
 `/league admin generate-playoffs`, `/league admin advance-round`.
-
-This file supersedes the previously separate `/season`, `/team`,
-`/player`, `/schedule`, and `/game` top-level commands.
 """
 from __future__ import annotations
 
@@ -54,7 +51,7 @@ from bot.services.leaders_service import (
     shutouts_leaders,
     takeaways_leaders,
 )
-from bot.services.league_settings import get_league_logo_url
+from bot.services.league_settings import get_league_background_url, get_league_logo_url, set_league_background_url
 from bot.services.playoff_service import PlayoffError, advance_round, generate_bracket, get_bracket, record_series_result
 from bot.services.recap_generator import RecapContext, format_top_performers, generate_recap
 from bot.services.season_service import SeasonNotFound, resolve_season, set_active_season
@@ -229,14 +226,8 @@ class LeagueCog(commands.Cog):
 
             ts = await session.scalar(select(TeamSeason).where(TeamSeason.team_id == team.id, TeamSeason.season_id == s.id))
             if ts is None:
-                # No record yet this season -- build a blank, all-zero
-                # record (never added to the session, nothing gets saved)
-                # so the card renders with real zeros instead of falling
-                # back to a text message.
                 ts = TeamSeason(
-                    team_id=team.id,
-                    season_id=s.id,
-                    club_id=None,
+                    team_id=team.id, season_id=s.id, club_id=None,
                     wins=0, losses=0, ot_losses=0, points=0,
                     goals_for=0, goals_against=0,
                     streak_type=None, streak_count=0, last_10=None,
@@ -252,7 +243,9 @@ class LeagueCog(commands.Cog):
             if team_top_scorer and (not team_top_pts or team_top_scorer.player.id != team_top_pts.player.id):
                 lines.append(f"{team_top_scorer.player.gamertag} — {team_top_scorer.value} goals")
 
-            path = await render_team_card(team, ts, s.name, lines)
+            league_logo_url = await get_league_logo_url(session, interaction.guild_id)
+            background_url = await get_league_background_url(session, interaction.guild_id)
+            path = await render_team_card(team, ts, s.name, lines, league_logo_url, background_url)
         await interaction.followup.send(file=discord.File(path))
 
     # ==================================================================
@@ -380,14 +373,8 @@ class LeagueCog(commands.Cog):
             ps = await session.scalar(select(PlayerSeason).where(PlayerSeason.player_id == player.id, PlayerSeason.season_id == s.id))
             team = None
             if ps is None:
-                # No games played yet this season -- build a blank, all-zero
-                # stat line (never added to the session, so nothing gets
-                # saved) so the card can render with real zeros instead of
-                # falling back to a text message.
                 ps = PlayerSeason(
-                    player_id=player.id,
-                    season_id=s.id,
-                    team_id=None,
+                    player_id=player.id, season_id=s.id, team_id=None,
                     games_played=0, goals=0, assists=0, points=0, plus_minus=0,
                     hits=0, pim=0, shots=0, ppg=0,
                     faceoffs_won=0, faceoffs_lost=0, takeaways=0, interceptions=0,
@@ -398,7 +385,9 @@ class LeagueCog(commands.Cog):
             else:
                 team = await session.get(Team, ps.team_id) if ps.team_id else None
 
-            path = await render_player_card(player, ps, team, s.name)
+            league_logo_url = await get_league_logo_url(session, interaction.guild_id)
+            background_url = await get_league_background_url(session, interaction.guild_id)
+            path = await render_player_card(player, ps, team, s.name, league_logo_url, background_url)
 
         await interaction.followup.send(file=discord.File(path))
 
@@ -501,6 +490,23 @@ class LeagueCog(commands.Cog):
                 setting.value = logo_url
         await interaction.response.send_message(embed=success_embed("League logo set", "Saved."))
 
+    @admin_group.command(name="add-background", description="Set a custom background photo used behind every graphic")
+    @app_commands.describe(image_url="Direct image URL for the background photo")
+    @commissioner_only()
+    async def admin_add_background(self, interaction: discord.Interaction, image_url: str):
+        async with get_session() as session:
+            await set_league_background_url(session, interaction.guild_id, image_url)
+        await interaction.response.send_message(
+            embed=success_embed("Background set", "Every graphic will now use this photo as its background. Use `/league admin remove-background` to revert to the default look at any time.")
+        )
+
+    @admin_group.command(name="remove-background", description="Remove the custom background photo, reverting to the default look")
+    @commissioner_only()
+    async def admin_remove_background(self, interaction: discord.Interaction):
+        async with get_session() as session:
+            await set_league_background_url(session, interaction.guild_id, None)
+        await interaction.response.send_message(embed=success_embed("Background removed", "Graphics have reverted to the default gradient look."))
+
     @admin_group.command(name="settings", description="View current league bot configuration")
     @commissioner_only()
     async def admin_settings(self, interaction: discord.Interaction):
@@ -536,7 +542,8 @@ class LeagueCog(commands.Cog):
 
             recap_text = await self._generate_and_attach_recap(session, result.game, result.home_team, result.away_team)
             league_logo_url = await get_league_logo_url(session, interaction.guild_id)
-            graphic_path = await render_game_result(result.game, result.home_team, result.away_team, league_logo_url)
+            background_url = await get_league_background_url(session, interaction.guild_id)
+            graphic_path = await render_game_result(result.game, result.home_team, result.away_team, league_logo_url, background_url)
             result.game.result_graphic_path = graphic_path
 
             series = await record_series_result(session, result.schedule, result.game)
@@ -596,11 +603,6 @@ class LeagueCog(commands.Cog):
                 await interaction.response.send_message(embed=error_embed("Bad score format", "Use the format `1-0`."), ephemeral=True)
                 return
 
-            # If no game_number was given, auto-find the correct pending
-            # schedule slot for this matchup (preferring a playoff series
-            # if one is pending) -- this is what fixes forfeits silently
-            # failing to update a playoff series score just because the
-            # exact game number wasn't typed in.
             schedule = None
             if game_number is not None:
                 schedule = await session.scalar(select(ScheduleGame).where(ScheduleGame.season_id == s.id, ScheduleGame.game_number == game_number))
@@ -640,9 +642,6 @@ class LeagueCog(commands.Cog):
                 )
             )
 
-            # Regular-season standings ONLY -- playoff forfeits must never
-            # touch TeamSeason/the standings table, same rule as regular
-            # imports.
             if not is_playoff_game:
                 await apply_team_season_delta(session, win_team.id, s.id, win_score, lose_score, False)
                 await apply_team_season_delta(session, lose_team.id, s.id, lose_score, win_score, False)
@@ -656,7 +655,8 @@ class LeagueCog(commands.Cog):
                 await recompute_standings(session, s.id)
 
             league_logo_url = await get_league_logo_url(session, interaction.guild_id)
-            graphic_path = await render_game_result(game, win_team, lose_team, league_logo_url)
+            background_url = await get_league_background_url(session, interaction.guild_id)
+            graphic_path = await render_game_result(game, win_team, lose_team, league_logo_url, background_url)
 
             series_status_text = None
             if schedule and schedule.playoff_series_id:
@@ -792,7 +792,9 @@ class LeagueCog(commands.Cog):
                 await interaction.followup.send(embed=info_embed("No standings", f"No games played yet in {s.name}."))
                 return
             rows = [(e, await session.get(Team, e.team_id)) for e in entries]
-            path = await render_standings(s.name, rows, await get_league_logo_url(session, interaction.guild_id))
+            league_logo_url = await get_league_logo_url(session, interaction.guild_id)
+            background_url = await get_league_background_url(session, interaction.guild_id)
+            path = await render_standings(s.name, rows, league_logo_url, background_url)
             await refresh_all_channels(interaction.client, session)
         await interaction.followup.send(file=discord.File(path))
 
@@ -823,9 +825,8 @@ class LeagueCog(commands.Cog):
             ]
 
             league_logo_url = await get_league_logo_url(session, interaction.guild_id)
-            # Always render, even with zero data across every category --
-            # each empty cell shows "No data yet" inside the image itself.
-            path = await render_combined_leaders_board(s.name, categories, league_logo_url)
+            background_url = await get_league_background_url(session, interaction.guild_id)
+            path = await render_combined_leaders_board(s.name, categories, league_logo_url, background_url)
             await refresh_all_channels(interaction.client, session)
         await interaction.followup.send(file=discord.File(path))
 
@@ -847,7 +848,9 @@ class LeagueCog(commands.Cog):
             game = await session.get(Game, schedule.game_id)
             home_team = await session.get(Team, game.home_team_id)
             away_team = await session.get(Team, game.away_team_id)
-            path = await render_game_result(game, home_team, away_team, await get_league_logo_url(session, interaction.guild_id))
+            league_logo_url = await get_league_logo_url(session, interaction.guild_id)
+            background_url = await get_league_background_url(session, interaction.guild_id)
+            path = await render_game_result(game, home_team, away_team, league_logo_url, background_url)
             embed = info_embed(f"{home_team.name} {game.home_score} - {game.away_score} {away_team.name}", game.recap_text or "")
         await interaction.followup.send(embed=embed, file=discord.File(path))
 
@@ -893,7 +896,8 @@ class LeagueCog(commands.Cog):
             all_team_ids = {t_id for round_series in rounds for series in round_series for t_id in (series.team_a_id, series.team_b_id)}
             teams_by_id = {t_id: await session.get(Team, t_id) for t_id in all_team_ids}
             league_logo_url = await get_league_logo_url(session, interaction.guild_id)
-            path = await render_playoff_bracket(s.name, rounds, teams_by_id, league_logo_url)
+            background_url = await get_league_background_url(session, interaction.guild_id)
+            path = await render_playoff_bracket(s.name, rounds, teams_by_id, league_logo_url, background_url)
 
         await interaction.followup.send(file=discord.File(path))
 
