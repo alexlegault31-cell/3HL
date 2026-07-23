@@ -1,4 +1,3 @@
-
 from bot.models.base import Base  # noqa: F401
 from bot.models.user import User  # noqa: F401
 from bot.models.season import Season  # noqa: F401
@@ -12,6 +11,7 @@ from bot.models.forfeit import Forfeit  # noqa: F401
 from bot.models.award import Award, AwardWinner  # noqa: F401
 from bot.models.transaction import Transaction  # noqa: F401
 from bot.models.settings import GuildSetting  # noqa: F401
+from bot.models.playoff import PlayoffSeries  # noqa: F401
 
 __all__ = [
     "Base",
@@ -34,5 +34,5 @@ __all__ = [
     "AwardWinner",
     "Transaction",
     "GuildSetting",
+    "PlayoffSeries",
 ]
-
