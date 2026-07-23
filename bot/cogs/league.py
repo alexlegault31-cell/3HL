@@ -362,7 +362,7 @@ class LeagueCog(commands.Cog):
 
         await interaction.response.send_message(embed=success_embed("Player removed", f"**{gamertag}** removed from their club for {s.name}."))
 
-        @player_group.command(name="stats", description="View a player's season stats card")
+    @player_group.command(name="stats", description="View a player's season stats card")
     @app_commands.describe(gamertag="Player gamertag (defaults to your linked account)", season="Season number (defaults to active)")
     async def player_stats(self, interaction: discord.Interaction, gamertag: str | None = None, season: int | None = None):
         await interaction.response.defer()
