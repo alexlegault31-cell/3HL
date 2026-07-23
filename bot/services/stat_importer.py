@@ -1,25 +1,33 @@
 """
-The core import pipeline behind `/entergame <schedule_game_number>`.
+The core import pipeline behind `/league admin submit-game`.
 
-Pipeline (matches the spec exactly):
+Pipeline:
   1. Look up the ScheduleGame for (season, game_number).
   2. Resolve home/away TeamSeason -> linked Club IDs.
-  3. Pull recent match history for both clubs from ChelStats.
+  3. Pull recent match history for both clubs from EA's Pro Clubs API.
   4. Intersect to find the match both clubs share, not already imported.
   5. Fetch full box score for that match.
   6. Persist Game + PlayerGameStat/GoalieGameStat/TeamGameStat permanently.
-  7. Upsert PlayerSeason / TeamSeason aggregates (incremental, never a full
-     season recompute, so historical seasons are untouched).
-  8. Recompute StandingsEntry for the season.
-  9. Recompute stat leaders is implicit (leaders_service queries live data).
-  10. Generate AI recap text.
-  11. Return an ImportResult the cog uses to post graphics + recap.
+  7. Upsert PlayerSeason aggregates (incremental, never a full season
+     recompute, so historical seasons are untouched).
+  8. If this is a REGULAR SEASON game (not playoffs): upsert TeamSeason
+     aggregates and recompute the standings table.
+  9. Return an ImportResult the cog uses to post graphics + recap, and to
+     feed into playoff_service.record_series_result if it's a playoff game.
 
-`reverse_game()` undoes steps 6-8 for `/game delete`, by walking the stored
-PlayerGameStat/GoalieGameStat/TeamGameStat rows (NOT by re-deriving deltas
-from the ChelStats API, which could have changed/disappeared) and
-subtracting them back out of the season aggregates, then deleting the Game
-row itself (cascades clean up the per-game stat rows).
+IMPORTANT: playoff games deliberately do NOT touch TeamSeason or the
+StandingsEntry table -- the regular season standings should only ever
+reflect regular season results. Playoff series results live entirely in
+PlayoffSeries (see services/playoff_service.py). This was a real bug in
+an earlier version of this file where playoff forfeits/imports were
+incorrectly being added to the regular season win/loss/points totals.
+
+`reverse_game()` undoes step 6-8 for `/league admin delete-game`, walking
+the stored PlayerGameStat/GoalieGameStat/TeamGameStat rows (NOT
+re-deriving deltas from the live API, which could have changed) and
+subtracting them back out of the season aggregates -- again skipping the
+TeamSeason/standings step entirely for playoff games, since those were
+never touched in the first place.
 """
 from __future__ import annotations
 
@@ -53,8 +61,7 @@ log = logging.getLogger(__name__)
 
 
 class ImportError_(RuntimeError):
-    """Raised for any expected/user-facing import failure (no client error
-    naming collision with builtins.ImportError)."""
+    """Raised for any expected/user-facing import failure."""
 
 
 @dataclass
@@ -81,29 +88,21 @@ async def import_game(
     if schedule.status == ScheduleStatus.PLAYED:
         raise ImportError_(f"Game #{game_number} has already been imported.")
     if schedule.status == ScheduleStatus.FORFEITED:
-        raise ImportError_(f"Game #{game_number} was recorded as a forfeit. Use `/game edit` to override.")
+        raise ImportError_(f"Game #{game_number} was recorded as a forfeit. Use `/league admin edit-game` to override.")
 
     home_ts = await _get_team_season(session, schedule.home_team_id, season_id)
     away_ts = await _get_team_season(session, schedule.away_team_id, season_id)
 
-    # Fetch these explicitly rather than via schedule.home_team/away_team --
-    # those are lazy-loaded relationships, and accessing them later (e.g.
-    # inside an f-string) outside of an awaited ORM call crashes with
-    # "MissingGreenlet" under the async engine. session.get() is a proper
-    # async-safe call, so doing it once up front avoids that entirely.
-    home_team_obj = await session.get(Team, schedule.home_team_id)
-    away_team_obj = await session.get(Team, schedule.away_team_id)
-
     if not home_ts.club_id:
-        raise ImportError_(f"{home_team_obj.name} has no linked Club ID. Run `/team link-club` first.")
+        raise ImportError_(f"{schedule.home_team.name} has no linked Club ID. Run `/league club swap` first.")
     if not away_ts.club_id:
-        raise ImportError_(f"{away_team_obj.name} has no linked Club ID. Run `/team link-club` first.")
+        raise ImportError_(f"{schedule.away_team.name} has no linked Club ID. Run `/league club swap` first.")
 
     match_detail = await _find_matching_match(client, home_ts.club_id, away_ts.club_id)
     if match_detail is None:
         raise ImportError_(
-            f"Couldn't find a recent EASHL match between {home_team_obj.name} "
-            f"(Club {home_ts.club_id}) and {away_team_obj.name} (Club {away_ts.club_id}). "
+            f"Couldn't find a recent EASHL match between {schedule.home_team.name} "
+            f"(Club {home_ts.club_id}) and {schedule.away_team.name} (Club {away_ts.club_id}). "
             f"Make sure the game has been played and try again in a few minutes."
         )
 
@@ -113,8 +112,6 @@ async def import_game(
 
     detail = match_detail
 
-    # Orient home/away correctly relative to our schedule (EA's API doesn't
-    # know which club is "home" in our league).
     if detail.home.club_id == home_ts.club_id:
         home_box, away_box = detail.home, detail.away
     else:
@@ -138,12 +135,12 @@ async def import_game(
         is_forfeit=False,
     )
     session.add(game)
-    await session.flush()  # need game.id
+    await session.flush()
 
     session.add(
         GameImport(
             game_id=game.id,
-            source="chelstats",
+            source="ea_pro_clubs",
             raw_payload=detail.raw,
             fetched_at=now,
         )
@@ -227,14 +224,20 @@ async def import_game(
             player_lines.append(line)
             await _apply_skater_season_delta(session, player.id, season_id, team_id, line)
 
-    await apply_team_season_delta(session, schedule.home_team_id, season_id, home_box.goals, away_box.goals, detail.went_to_overtime)
-    await apply_team_season_delta(session, schedule.away_team_id, season_id, away_box.goals, home_box.goals, detail.went_to_overtime)
+    # Regular-season standings/records ONLY -- playoff games never touch
+    # TeamSeason or the standings table. Playoff results live entirely in
+    # PlayoffSeries (see playoff_service.record_series_result, called by
+    # the cog right after this function returns).
+    if not schedule.is_playoffs:
+        await apply_team_season_delta(session, schedule.home_team_id, season_id, home_box.goals, away_box.goals, detail.went_to_overtime)
+        await apply_team_season_delta(session, schedule.away_team_id, season_id, away_box.goals, home_box.goals, detail.went_to_overtime)
 
     schedule.status = ScheduleStatus.PLAYED
     schedule.game_id = game.id
 
     await session.flush()
-    await recompute_standings(session, season_id)
+    if not schedule.is_playoffs:
+        await recompute_standings(session, season_id)
 
     home_team = await session.get(Team, schedule.home_team_id)
     away_team = await session.get(Team, schedule.away_team_id)
@@ -250,9 +253,11 @@ async def import_game(
 
 
 async def reverse_game(session: AsyncSession, game: Game) -> None:
-    """Used by /game delete. Subtracts this game's stat lines back out of
-    every season aggregate, then deletes the Game row (cascades clean up
-    the per-game PlayerGameStat/GoalieGameStat/TeamGameStat rows)."""
+    """Used by /league admin delete-game. Subtracts this game's stat lines
+    back out of every PLAYER season aggregate, then deletes the Game row.
+    TeamSeason/standings are only touched (and thus only need reversing)
+    if this was a regular season game -- playoff games never affected
+    them in the first place."""
     player_lines = (await session.execute(select(PlayerGameStat).where(PlayerGameStat.game_id == game.id))).scalars().all()
     goalie_lines = (await session.execute(select(GoalieGameStat).where(GoalieGameStat.game_id == game.id))).scalars().all()
 
@@ -290,21 +295,53 @@ async def reverse_game(session: AsyncSession, game: Game) -> None:
             ps.shutouts -= 1 if line.shutout else 0
             ps.minutes_played -= line.minutes_played
 
-    home_ts = await _get_team_season(session, game.home_team_id, game.season_id)
-    away_ts = await _get_team_season(session, game.away_team_id, game.season_id)
-    undo_team_result(home_ts, game.home_score, game.away_score, game.went_to_overtime)
-    undo_team_result(away_ts, game.away_score, game.home_score, game.went_to_overtime)
-
+    schedule = None
     if game.schedule_id:
         schedule = await session.get(ScheduleGame, game.schedule_id)
-        if schedule:
-            schedule.status = ScheduleStatus.SCHEDULED
-            schedule.game_id = None
+
+    is_playoff_game = schedule.is_playoffs if schedule else False
+
+    if not is_playoff_game:
+        home_ts = await _get_team_season(session, game.home_team_id, game.season_id)
+        away_ts = await _get_team_season(session, game.away_team_id, game.season_id)
+        undo_team_result(home_ts, game.home_score, game.away_score, game.went_to_overtime)
+        undo_team_result(away_ts, game.away_score, game.home_score, game.went_to_overtime)
+
+    if schedule:
+        schedule.status = ScheduleStatus.SCHEDULED
+        schedule.game_id = None
 
     season_id = game.season_id
     await session.delete(game)
     await session.flush()
-    await recompute_standings(session, season_id)
+    if not is_playoff_game:
+        await recompute_standings(session, season_id)
+
+
+async def find_pending_schedule_for_matchup(
+    session: AsyncSession, season_id: int, team_a_id: int, team_b_id: int
+) -> Optional[ScheduleGame]:
+    """Auto-finds the correct not-yet-played ScheduleGame between two
+    teams, so /league admin forfeit-game can link a forfeit to the right
+    series/schedule slot WITHOUT the commissioner having to look up and
+    type the exact game number -- a real source of user error, since a
+    forgotten game_number meant a playoff forfeit silently never updated
+    the series score. Prefers a playoff-tagged pending game (since that's
+    the more error-prone case) over a regular season one, and the lowest
+    game_number if there are multiple matches."""
+    stmt = (
+        select(ScheduleGame)
+        .where(
+            ScheduleGame.season_id == season_id,
+            ScheduleGame.status == ScheduleStatus.SCHEDULED,
+            (
+                ((ScheduleGame.home_team_id == team_a_id) & (ScheduleGame.away_team_id == team_b_id))
+                | ((ScheduleGame.home_team_id == team_b_id) & (ScheduleGame.away_team_id == team_a_id))
+            ),
+        )
+        .order_by(ScheduleGame.is_playoffs.desc(), ScheduleGame.game_number.asc())
+    )
+    return await session.scalar(stmt)
 
 
 # ---------------------------------------------------------------------------
@@ -326,7 +363,7 @@ async def _get_team_season(session: AsyncSession, team_id: int, season_id: int) 
     stmt = select(TeamSeason).where(TeamSeason.team_id == team_id, TeamSeason.season_id == season_id)
     ts = await session.scalar(stmt)
     if ts is None:
-        raise ImportError_("Team is not registered for this season. Run `/team create` / season setup first.")
+        raise ImportError_("Team is not registered for this season. Run `/league club add` / season setup first.")
     return ts
 
 
@@ -350,8 +387,6 @@ async def _resolve_player(session: AsyncSession, gamertag: str, external_id: Opt
     else:
         if external_id and not player.external_player_id:
             player.external_player_id = external_id
-        # A skater who occasionally plays goalie (or vice versa) stays
-        # whatever role they've most recently played; doesn't block import.
         player.is_goalie = is_goalie
     return player
 
@@ -379,7 +414,7 @@ async def _get_or_create_player_season(session: AsyncSession, player_id: int, se
         session.add(ps)
         await session.flush()
     else:
-        ps.team_id = team_id  # keep "current team" fresh
+        ps.team_id = team_id
     return ps
 
 
@@ -447,6 +482,10 @@ async def apply_team_season_delta(
 
 
 def undo_team_result(ts: TeamSeason, goals_for: int, goals_against: int, went_ot: bool) -> None:
+    """Public, synchronous by design -- called directly (no await) by
+    /league admin edit-game to reverse a team's record before reapplying
+    a corrected score. Does no DB queries itself, just mutates the
+    already-fetched TeamSeason object, so it never needed to be async."""
     ts.goals_for -= goals_for
     ts.goals_against -= goals_against
     if goals_for > goals_against:
@@ -457,9 +496,5 @@ def undo_team_result(ts: TeamSeason, goals_for: int, goals_against: int, went_ot
         ts.points -= 1
     else:
         ts.losses -= 1
-    # Streak/last10 are display-only rolling windows; on delete we just
-    # truncate the most recent character rather than fully recomputing,
-    # since /game delete is a rare admin action and a minor streak
-    # discrepancy self-heals on the next game import.
     if ts.last_10:
         ts.last_10 = ts.last_10[:-1] or None
