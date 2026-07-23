@@ -1,7 +1,15 @@
-
 """
 Shared visual theme for every generated graphic. Centralizing this means
 re-skinning the whole bot for a new league is a one-file change.
+
+`prepare_canvas()` is the shared entry point every graphic now uses to
+build its base image: if the league has set a custom background photo
+(`/league admin add-background`), it fills the whole canvas (cropped to
+fit, darkened so text stays readable). If not, it falls back to a
+gradient banner in the league's accent color over a solid dark
+background -- so every graphic looks good whether or not a background
+photo is configured, and removing the background photo instantly reverts
+to the built-in look with no other changes needed.
 
 Font notes
 ----------
@@ -9,15 +17,16 @@ We ship no proprietary fonts. `FONT_DIR` defaults to the bundled
 DejaVu fonts installed via the Dockerfile's `fonts-dejavu-core` package
 (works out of the box, no licensing concerns). Drop a TTF named
 `Bold.ttf` / `Regular.ttf` / `Black.ttf` into `assets/fonts/` to use a
-custom league font instead — `load_font()` prefers those if present.
+custom league font instead -- `load_font()` prefers those if present.
 """
 from __future__ import annotations
 
 import os
 from functools import lru_cache
 from pathlib import Path
+from typing import Optional
 
-from PIL import ImageFont
+from PIL import Image, ImageDraw, ImageFont
 
 ASSETS_DIR = Path(__file__).resolve().parent.parent.parent / "assets"
 FONT_DIR = ASSETS_DIR / "fonts"
@@ -41,7 +50,7 @@ def load_font(weight: str, size: int) -> ImageFont.FreeTypeFont:
 
 
 class Theme:
-    # Base palette — dark "broadcast graphics" look.
+    # Base palette -- dark "broadcast graphics" look.
     BG_DARK = (16, 18, 24)
     BG_PANEL = (24, 27, 36)
     BG_PANEL_ALT = (30, 34, 45)
@@ -58,9 +67,9 @@ class Theme:
     SILVER = (192, 197, 206)
     BRONZE = (205, 138, 89)
 
-    @staticmethod
-    def team_color(team, fallback=(88, 166, 255)):
-        if getattr(team, "primary_color", None):
+    @classmethod
+    def team_color(cls, team, fallback=(88, 166, 255)):
+        if team is not None and getattr(team, "primary_color", None):
             return hex_to_rgb(team.primary_color)
         return fallback
 
@@ -71,3 +80,48 @@ def hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
         return Theme.ACCENT
     return tuple(int(h[i : i + 2], 16) for i in (0, 2, 4))  # type: ignore[return-value]
 
+
+def _lerp_color(c1: tuple[int, int, int], c2: tuple[int, int, int], t: float) -> tuple[int, int, int]:
+    return tuple(int(c1[i] + (c2[i] - c1[i]) * t) for i in range(3))  # type: ignore[return-value]
+
+
+async def prepare_canvas(
+    width: int,
+    height: int,
+    accent_color: tuple[int, int, int] = Theme.ACCENT,
+    background_url: Optional[str] = None,
+    banner_height: Optional[int] = None,
+) -> tuple[Image.Image, ImageDraw.ImageDraw]:
+    """Builds the base image + draw context every graphic starts from.
+
+    If `background_url` is set and loads successfully, it fills the ENTIRE
+    canvas (cropped to fit, darkened for text legibility) -- this is the
+    optional custom background photo from `/league admin add-background`.
+
+    Otherwise, falls back to a solid dark background with a gradient
+    banner (dark navy -> the league's accent color) across the top
+    `banner_height` pixels, which is the built-in look with no
+    configuration needed.
+    """
+    if background_url:
+        # Imported here (not at module top) to avoid a circular import,
+        # since logo_fetch itself doesn't need anything from theme except
+        # GENERATED_DIR.
+        from bot.graphics.logo_fetch import get_background_image
+
+        bg = await get_background_image(background_url, (width, height))
+        if bg is not None:
+            return bg, ImageDraw.Draw(bg)
+
+    img = Image.new("RGB", (width, height), Theme.BG_DARK)
+    draw = ImageDraw.Draw(img)
+
+    if banner_height:
+        dark_navy = (10, 14, 28)
+        muted_accent = tuple(c // 3 for c in accent_color)
+        for y in range(banner_height):
+            t = (y / banner_height) * 0.6
+            draw.line([(0, y), (width, y)], fill=_lerp_color(dark_navy, muted_accent, t))
+        draw.rectangle([(0, banner_height - 4), (width, banner_height)], fill=accent_color)
+
+    return img, draw
