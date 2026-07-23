@@ -1,20 +1,7 @@
 """
-Fetches and caches team logo images from `Team.logo_url` (set via
-`/league club add-logo`), so graphics can draw a real crest instead of a
-plain colored dot.
-
-Design notes
-------------
-- Cached to disk under `generated/logo_cache/`, keyed by a hash of the
-  URL (not the team id) -- if a team's logo URL changes, it's treated as
-  a fresh cache entry automatically rather than serving a stale image.
-- Every call is wrapped so a bad URL, timeout, or corrupt image falls
-  back to `None` rather than raising -- graphics code always has a
-  colored-dot fallback ready and should never crash because a logo
-  failed to load.
-- Resizing to the caller's exact target size happens on every call
-  (cheap, since it's operating on an already-downloaded small image) so
-  one cached original can serve differently-sized graphics.
+Fetches and caches images from URLs -- both team/league logos (drawn as-is,
+small) and full-canvas background images (cropped to fill, then darkened
+so text stays readable on top of them).
 """
 from __future__ import annotations
 
@@ -25,7 +12,7 @@ from pathlib import Path
 from typing import Optional
 
 import aiohttp
-from PIL import Image
+from PIL import Image, ImageEnhance
 
 from bot.graphics.theme import GENERATED_DIR
 
@@ -51,40 +38,73 @@ async def _download_and_cache(url: str) -> Optional[Path]:
         async with aiohttp.ClientSession() as session:
             async with session.get(url, timeout=aiohttp.ClientTimeout(total=_FETCH_TIMEOUT_SECONDS)) as resp:
                 if resp.status != 200:
-                    log.warning("Logo fetch failed (%s) for %s", resp.status, url)
+                    log.warning("Image fetch failed (%s) for %s", resp.status, url)
                     return None
                 data = await resp.read()
-    except Exception:  # noqa: BLE001
-        log.warning("Logo fetch failed for %s", url, exc_info=True)
+    except Exception:
+        log.warning("Image fetch failed for %s", url, exc_info=True)
         return None
 
     try:
         img = Image.open(io.BytesIO(data))
-        img.verify()  # confirms it's actually a valid image, raises otherwise
-        # Re-open after verify() -- verify() leaves the file object unusable
+        img.verify()
         img = Image.open(io.BytesIO(data)).convert("RGBA")
         img.save(cache_path, format="PNG")
         return cache_path
-    except Exception:  # noqa: BLE001
-        log.warning("Logo data was not a valid image for %s", url, exc_info=True)
+    except Exception:
+        log.warning("Image data was not a valid image for %s", url, exc_info=True)
         return None
 
 
 async def get_team_logo(logo_url: Optional[str], size: tuple[int, int]) -> Optional[Image.Image]:
-    """Returns a resized RGBA PIL Image for the given logo URL, or None if
-    there's no URL, the fetch failed, or the image was invalid. Callers
-    should always have a colored-dot/text fallback for the None case."""
+    """Returns a resized RGBA image for a team/league logo, or None on any
+    failure. Callers should always have a colored-shape fallback ready."""
     if not logo_url:
         return None
-
     cache_path = await _download_and_cache(logo_url)
     if cache_path is None:
         return None
-
     try:
         img = Image.open(cache_path).convert("RGBA")
-        img = img.resize(size, Image.LANCZOS)
-        return img
-    except Exception:  # noqa: BLE001
+        return img.resize(size, Image.LANCZOS)
+    except Exception:
         log.warning("Failed to load cached logo %s", cache_path, exc_info=True)
+        return None
+
+
+async def get_background_image(
+    background_url: Optional[str], size: tuple[int, int], darken: float = 0.45
+) -> Optional[Image.Image]:
+    """Returns a full-canvas background image cropped (not stretched) to
+    exactly fill `size`, with a dark overlay applied so text drawn on top
+    stays readable. Returns None if no URL is set or the fetch/crop fails
+    -- callers fall back to the plain gradient/solid background in that
+    case, so a bad background URL never breaks the graphic."""
+    if not background_url:
+        return None
+    cache_path = await _download_and_cache(background_url)
+    if cache_path is None:
+        return None
+    try:
+        img = Image.open(cache_path).convert("RGB")
+
+        # Crop-to-fill (like CSS background-size: cover) -- resize so the
+        # SHORTER dimension matches the target, then center-crop the rest.
+        target_w, target_h = size
+        src_w, src_h = img.size
+        scale = max(target_w / src_w, target_h / src_h)
+        new_w, new_h = int(src_w * scale) + 1, int(src_h * scale) + 1
+        img = img.resize((new_w, new_h), Image.LANCZOS)
+
+        left = (new_w - target_w) // 2
+        top = (new_h - target_h) // 2
+        img = img.crop((left, top, left + target_w, top + target_h))
+
+        # Darken so white/light text stays readable on top of any photo.
+        enhancer = ImageEnhance.Brightness(img)
+        img = enhancer.enhance(1.0 - darken)
+
+        return img.convert("RGB")
+    except Exception:
+        log.warning("Failed to load/crop background %s", cache_path, exc_info=True)
         return None
