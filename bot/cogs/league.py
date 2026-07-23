@@ -54,6 +54,7 @@ from bot.services.leaders_service import (
 from bot.services.league_settings import get_league_background_url, get_league_logo_url, set_league_background_url
 from bot.services.playoff_service import PlayoffError, advance_round, generate_bracket, get_bracket, record_series_result
 from bot.services.recap_generator import RecapContext, format_top_performers, generate_recap
+from bot.services.schedule_generator import generate_round_robin
 from bot.services.season_service import SeasonNotFound, resolve_season, set_active_season
 from bot.services.stat_importer import ImportError_, apply_team_season_delta, find_pending_schedule_for_matchup, import_game, reverse_game
 from bot.services.standings_service import recompute_standings
@@ -772,6 +773,86 @@ class LeagueCog(commands.Cog):
                 lines.append(f"{team_a.name} vs {team_b.name}")
 
         await interaction.response.send_message(embed=success_embed(f"{created[0].round_name} generated", "\n".join(lines)))
+
+    @admin_group.command(name="generate-schedule", description="Auto-generate a full round-robin schedule for the league")
+    @app_commands.describe(
+        times_through="How many times each team plays every other team (2 = home-and-away, like a normal season)",
+        teams="Comma-separated team names to include (optional -- defaults to every active club in the league)",
+        starting_game_number="First game number to use (optional -- defaults to continuing after any existing schedule)",
+    )
+    @commissioner_only()
+    async def admin_generate_schedule(
+        self,
+        interaction: discord.Interaction,
+        times_through: int = 2,
+        teams: str | None = None,
+        starting_game_number: int | None = None,
+        season: int | None = None,
+    ):
+        async with get_session() as session:
+            try:
+                s = await resolve_season(session, season)
+            except SeasonNotFound as e:
+                await interaction.response.send_message(embed=error_embed("Season error", str(e)), ephemeral=True)
+                return
+
+            if teams:
+                names = [t.strip() for t in teams.split(",") if t.strip()]
+                team_objs = []
+                for name in names:
+                    team = await session.scalar(select(Team).where(Team.name.ilike(name)))
+                    if not team:
+                        await interaction.response.send_message(embed=error_embed("Unknown club", f"No club named **{name}**."), ephemeral=True)
+                        return
+                    team_objs.append(team)
+            else:
+                team_objs = (
+                    await session.execute(select(Team).where(Team.is_active.is_(True)).order_by(Team.name))
+                ).scalars().all()
+
+            if len(team_objs) < 2:
+                await interaction.response.send_message(
+                    embed=error_embed("Not enough clubs", "Need at least 2 clubs to generate a schedule -- add clubs with `/league club add` first."),
+                    ephemeral=True,
+                )
+                return
+
+            try:
+                matchups = generate_round_robin([t.id for t in team_objs], times_through=times_through)
+            except ValueError as e:
+                await interaction.response.send_message(embed=error_embed("Couldn't generate schedule", str(e)), ephemeral=True)
+                return
+
+            if starting_game_number is not None:
+                next_number = starting_game_number
+            else:
+                existing_numbers = (
+                    await session.execute(select(ScheduleGame.game_number).where(ScheduleGame.season_id == s.id))
+                ).scalars().all()
+                next_number = (max(existing_numbers) + 1) if existing_numbers else 1
+
+            created_count = 0
+            for m in matchups:
+                session.add(
+                    ScheduleGame(
+                        season_id=s.id,
+                        game_number=next_number,
+                        week=m.round_number,
+                        home_team_id=m.home_team_id,
+                        away_team_id=m.away_team_id,
+                    )
+                )
+                next_number += 1
+                created_count += 1
+
+        await interaction.response.send_message(
+            embed=success_embed(
+                "Schedule generated",
+                f"Created **{created_count}** games across **{matchups[-1].round_number}** weeks for **{len(team_objs)}** clubs "
+                f"(each team plays every other team **{times_through}x**).\n\nGame numbers **{next_number - created_count}**–**{next_number - 1}**. "
+                f"Use `/league schedule view` to see the full schedule.",
+            )
+        )
 
     # ==================================================================
     # /league refresh
