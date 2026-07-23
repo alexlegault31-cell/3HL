@@ -3,23 +3,25 @@ from __future__ import annotations
 
 import uuid
 
-from PIL import Image, ImageDraw
-
 from bot.graphics.logo_fetch import get_team_logo
-from bot.graphics.theme import GENERATED_DIR, Theme, load_font
+from bot.graphics.theme import GENERATED_DIR, Theme, load_font, prepare_canvas
 from bot.models import Player, PlayerSeason, Team
 
-WIDTH, HEIGHT = 760, 420
-LOGO_SIZE = 64
+WIDTH, HEIGHT = 780, 440
+LOGO_SIZE = 72
+BANNER_H = 110
 
 
-async def render_player_card(player: Player, season: PlayerSeason, team: Team | None, season_label: str) -> str:
-    img = Image.new("RGB", (WIDTH, HEIGHT), Theme.BG_DARK)
-    draw = ImageDraw.Draw(img)
-
+async def render_player_card(
+    player: Player,
+    season: PlayerSeason,
+    team: Team | None,
+    season_label: str,
+    league_logo_url: str | None = None,
+    background_url: str | None = None,
+) -> str:
     accent = Theme.team_color(team) if team else Theme.ACCENT
-    draw.rectangle([(0, 0), (WIDTH, 10)], fill=accent)
-    draw.rounded_rectangle([(24, 30), (WIDTH - 24, HEIGHT - 24)], radius=18, fill=Theme.BG_PANEL, outline=Theme.BORDER, width=1)
+    img, draw = await prepare_canvas(WIDTH, HEIGHT, accent, background_url, banner_height=BANNER_H)
 
     name_font = load_font("Black", 38)
     sub_font = load_font("Regular", 20)
@@ -27,22 +29,25 @@ async def render_player_card(player: Player, season: PlayerSeason, team: Team | 
     stat_val_font = load_font("Black", 34)
     role_font = load_font("Bold", 14)
 
-    draw.text((56, 58), player.gamertag, font=name_font, fill=Theme.TEXT_PRIMARY)
+    draw.text((32, 24), player.gamertag, font=name_font, fill=(255, 255, 255))
     team_line = f"{team.name} • {season_label}" if team else season_label
-    draw.text((58, 108), team_line, font=sub_font, fill=Theme.TEXT_SECONDARY)
+    draw.text((34, 74), team_line, font=sub_font, fill=(210, 216, 230))
 
     logo = await get_team_logo(team.logo_url if team else None, (LOGO_SIZE, LOGO_SIZE))
     if logo is not None:
-        img.paste(logo, (WIDTH - 56 - LOGO_SIZE, 50), logo.split()[-1])
+        img.paste(logo, (WIDTH - 32 - LOGO_SIZE, 20), logo.split()[-1])
     else:
-        # Fallback: the original colored circle with a role-letter badge
-        draw.ellipse([(WIDTH - 110, 58), (WIDTH - 56, 112)], fill=accent)
+        draw.ellipse([(WIDTH - 32 - LOGO_SIZE, 20), (WIDTH - 32, 20 + LOGO_SIZE)], fill=accent)
         role_letter = "G" if player.is_goalie else "S"
         rw = draw.textlength(role_letter, font=role_font)
-        draw.text((WIDTH - 110 + (54 - rw) / 2, 70), role_letter, font=role_font, fill=(10, 10, 10))
+        draw.text((WIDTH - 32 - LOGO_SIZE + (LOGO_SIZE - rw) / 2, 20 + LOGO_SIZE / 2 - 8), role_letter, font=role_font, fill=(10, 10, 10))
+
+    league_logo = await get_team_logo(league_logo_url, (44, 44))
+    if league_logo is not None:
+        img.paste(league_logo, (WIDTH - 32 - LOGO_SIZE - 56, 34), league_logo.split()[-1])
 
     role = "Goalie" if player.is_goalie else "Skater"
-    draw.text((58, 134), role, font=role_font, fill=Theme.TEXT_MUTED)
+    draw.text((34, BANNER_H - 26), role, font=role_font, fill=(210, 216, 230))
 
     if player.is_goalie:
         stats = [
@@ -65,7 +70,7 @@ async def render_player_card(player: Player, season: PlayerSeason, team: Team | 
 
     cols = 3
     cell_w = (WIDTH - 56 * 2) // cols
-    start_y = 200
+    start_y = BANNER_H + 40
     for i, (label, value) in enumerate(stats):
         cx = 56 + (i % cols) * cell_w
         cy = start_y + (i // cols) * 110
