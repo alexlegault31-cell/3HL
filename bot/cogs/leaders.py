@@ -1,6 +1,7 @@
-"""`/leaders <category>` -- always returns a graphic on success, matching
-the "graphics, not text" preference. Categories now cover the full range
-of stats EA's API provides, not just goals/assists/points."""
+"""`/leaders <category>` -- always returns a graphic, even with zero data
+(shows a clean "No data yet" placeholder inside the image itself rather
+than falling back to a text message). Categories cover the full range of
+stats EA's API provides, not just goals/assists/points."""
 from __future__ import annotations
 
 from typing import Literal
@@ -15,6 +16,7 @@ from bot.services.leaders_service import (
     assists_leaders,
     blocked_shots_leaders,
     faceoff_pct_leaders,
+    gaa_leaders,
     goalie_leaders,
     goals_leaders,
     hits_leaders,
@@ -26,7 +28,7 @@ from bot.services.leaders_service import (
 )
 from bot.services.league_settings import get_league_logo_url
 from bot.services.season_service import SeasonNotFound, resolve_season
-from bot.utils.embeds import error_embed, info_embed
+from bot.utils.embeds import error_embed
 
 CATEGORY_FUNCS = {
     "goals": (goals_leaders, "Goals Leaders"),
@@ -38,12 +40,24 @@ CATEGORY_FUNCS = {
     "takeaways": (takeaways_leaders, "Takeaways Leaders"),
     "interceptions": (interceptions_leaders, "Interceptions Leaders"),
     "blocked_shots": (blocked_shots_leaders, "Blocked Shots Leaders"),
+    "gaa": (gaa_leaders, "GAA Leaders"),
     "goalie": (goalie_leaders, "Goalie Leaders (SV%)"),
     "shutouts": (shutouts_leaders, "Shutouts Leaders"),
 }
 
 CategoryLiteral = Literal[
-    "goals", "assists", "points", "hits", "pim", "faceoff_pct", "takeaways", "interceptions", "blocked_shots", "goalie", "shutouts"
+    "goals",
+    "assists",
+    "points",
+    "hits",
+    "pim",
+    "faceoff_pct",
+    "takeaways",
+    "interceptions",
+    "blocked_shots",
+    "gaa",
+    "goalie",
+    "shutouts",
 ]
 
 
@@ -70,11 +84,11 @@ class LeadersCog(commands.Cog):
                 return
 
             rows = await func(session, s.id, limit=10)
-            if not rows:
-                await interaction.followup.send(embed=info_embed("No data", f"No {category} data for {s.name} yet."))
-                return
-
-            path = await render_leaders_board(title, s.name, rows, await get_league_logo_url(session, interaction.guild_id))
+            # Always render the graphic, even with zero rows -- it shows
+            # a clean "No data recorded yet" placeholder inside the image
+            # itself instead of falling back to a plain text message.
+            league_logo_url = await get_league_logo_url(session, interaction.guild_id)
+            path = await render_leaders_board(title, s.name, rows, league_logo_url)
 
         await interaction.followup.send(file=discord.File(path))
 
