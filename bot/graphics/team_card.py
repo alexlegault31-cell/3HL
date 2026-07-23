@@ -1,29 +1,32 @@
 """Renders team profile cards (/league club stats) and stat leader boards
-(/leaders ...), with real club crests where available."""
+(/leaders ...), with real club crests and a gradient banner (or custom
+background photo) instead of a flat dark card."""
 from __future__ import annotations
 
 import uuid
 from typing import Sequence
 
-from PIL import Image, ImageDraw
-
 from bot.graphics.logo_fetch import get_team_logo
-from bot.graphics.theme import GENERATED_DIR, Theme, load_font
+from bot.graphics.theme import GENERATED_DIR, Theme, load_font, prepare_canvas
 from bot.models import Team, TeamSeason
 from bot.services.leaders_service import LeaderRow
 
-WIDTH, HEIGHT = 760, 420
-CARD_LOGO_SIZE = 64
-ROW_LOGO_SIZE = 28
+WIDTH, HEIGHT = 780, 440
+CARD_LOGO_SIZE = 72
+ROW_LOGO_SIZE = 30
+BANNER_H = 110
 
 
-async def render_team_card(team: Team, team_season: TeamSeason, season_label: str, leaders_lines: list[str]) -> str:
-    img = Image.new("RGB", (WIDTH, HEIGHT), Theme.BG_DARK)
-    draw = ImageDraw.Draw(img)
-
+async def render_team_card(
+    team: Team,
+    team_season: TeamSeason,
+    season_label: str,
+    leaders_lines: list[str],
+    league_logo_url: str | None = None,
+    background_url: str | None = None,
+) -> str:
     accent = Theme.team_color(team)
-    draw.rectangle([(0, 0), (WIDTH, 10)], fill=accent)
-    draw.rounded_rectangle([(24, 30), (WIDTH - 24, HEIGHT - 24)], radius=18, fill=Theme.BG_PANEL, outline=Theme.BORDER, width=1)
+    img, draw = await prepare_canvas(WIDTH, HEIGHT, accent, background_url, banner_height=BANNER_H)
 
     name_font = load_font("Black", 38)
     sub_font = load_font("Regular", 20)
@@ -31,13 +34,16 @@ async def render_team_card(team: Team, team_season: TeamSeason, season_label: st
     stat_val_font = load_font("Black", 34)
     leader_font = load_font("Regular", 18)
 
-    logo = await get_team_logo(team.logo_url, (CARD_LOGO_SIZE, CARD_LOGO_SIZE))
-    name_x = 56
-    if logo is not None:
-        img.paste(logo, (WIDTH - 56 - CARD_LOGO_SIZE, 40), logo.split()[-1])
+    draw.text((32, 24), team.name, font=name_font, fill=(255, 255, 255))
+    draw.text((34, 74), season_label, font=sub_font, fill=(210, 216, 230))
 
-    draw.text((name_x, 58), team.name, font=name_font, fill=Theme.TEXT_PRIMARY)
-    draw.text((name_x + 2, 108), season_label, font=sub_font, fill=Theme.TEXT_SECONDARY)
+    logo = await get_team_logo(team.logo_url, (CARD_LOGO_SIZE, CARD_LOGO_SIZE))
+    if logo is not None:
+        img.paste(logo, (WIDTH - 32 - CARD_LOGO_SIZE, 20), logo.split()[-1])
+
+    league_logo = await get_team_logo(league_logo_url, (44, 44))
+    if league_logo is not None:
+        img.paste(league_logo, (WIDTH - 32 - CARD_LOGO_SIZE - 56, 33), league_logo.split()[-1])
 
     stats = [
         ("RECORD", f"{team_season.wins}-{team_season.losses}-{team_season.ot_losses}"),
@@ -49,16 +55,17 @@ async def render_team_card(team: Team, team_season: TeamSeason, season_label: st
     ]
     cols = 3
     cell_w = (WIDTH - 56 * 2) // cols
-    start_y = 170
+    start_y = BANNER_H + 40
     for i, (label, value) in enumerate(stats):
         cx = 56 + (i % cols) * cell_w
         cy = start_y + (i // cols) * 90
         draw.text((cx, cy), label, font=stat_label_font, fill=Theme.TEXT_MUTED)
         draw.text((cx, cy + 22), value, font=stat_val_font, fill=Theme.TEXT_PRIMARY)
 
-    draw.line([(56, 330), (WIDTH - 56, 330)], fill=Theme.BORDER, width=1)
-    draw.text((56, 342), "TEAM LEADERS", font=stat_label_font, fill=Theme.TEXT_MUTED)
-    y = 368
+    line_y = start_y + 200
+    draw.line([(56, line_y), (WIDTH - 56, line_y)], fill=accent, width=2)
+    draw.text((56, line_y + 12), "TEAM LEADERS", font=stat_label_font, fill=Theme.TEXT_MUTED)
+    y = line_y + 38
     for line in leaders_lines[:2]:
         draw.text((56, y), line, font=leader_font, fill=Theme.TEXT_SECONDARY)
         y += 24
@@ -68,33 +75,36 @@ async def render_team_card(team: Team, team_season: TeamSeason, season_label: st
     return str(out_path)
 
 
-async def render_leaders_board(title: str, season_label: str, rows: Sequence[LeaderRow], league_logo_url: str | None = None) -> str:
-    width = 760
-    row_h = 54
+async def render_leaders_board(
+    title: str,
+    season_label: str,
+    rows: Sequence[LeaderRow],
+    league_logo_url: str | None = None,
+    background_url: str | None = None,
+    accent_color: tuple[int, int, int] = Theme.ACCENT,
+) -> str:
+    width = 780
+    row_h = 56
     header_h = 120
-    # Always render at least one row's worth of height, even with zero
-    # data, so the "No data yet" placeholder has room to draw -- this is
-    # what lets this graphic always be returned instead of falling back
-    # to a plain text message when a season has no stats recorded yet.
     height = header_h + row_h * max(len(rows), 1) + 30
-    img = Image.new("RGB", (width, height), Theme.BG_DARK)
-    draw = ImageDraw.Draw(img)
+
+    img, draw = await prepare_canvas(width, height, accent_color, background_url, banner_height=header_h)
 
     title_font = load_font("Black", 34)
-    sub_font = load_font("Regular", 20)
+    sub_font = load_font("Bold", 20)
     row_font = load_font("Regular", 22)
     rank_font = load_font("Black", 24)
     val_font = load_font("Black", 26)
     sec_font = load_font("Regular", 16)
 
-    draw.text((40, 24), title.upper(), font=title_font, fill=Theme.TEXT_PRIMARY)
-    draw.text((40, 66), season_label, font=sub_font, fill=Theme.TEXT_SECONDARY)
+    draw.text((40, 24), title.upper(), font=title_font, fill=(255, 255, 255))
+    draw.text((40, 66), season_label, font=sub_font, fill=(210, 216, 230))
 
-    league_logo = await get_team_logo(league_logo_url, (56, 56))
+    league_logo = await get_team_logo(league_logo_url, (60, 60))
     if league_logo is not None:
-        img.paste(league_logo, (width - 40 - 56, 20), league_logo.split()[-1])
+        img.paste(league_logo, (width - 40 - 60, 18), league_logo.split()[-1])
 
-    draw.line([(40, header_h - 6), (width - 40, header_h - 6)], fill=Theme.BORDER, width=2)
+    draw.line([(40, header_h - 6), (width - 40, header_h - 6)], fill=accent_color, width=2)
 
     if not rows:
         draw.text((40, header_h + 20), "No data recorded yet this season.", font=row_font, fill=Theme.TEXT_MUTED)
@@ -116,7 +126,7 @@ async def render_leaders_board(title: str, season_label: str, rows: Sequence[Lea
         if row.team is not None:
             logo = await get_team_logo(row.team.logo_url, (ROW_LOGO_SIZE, ROW_LOGO_SIZE))
             if logo is not None:
-                img.paste(logo, (name_x, y + 12), logo.split()[-1])
+                img.paste(logo, (name_x, y + 11), logo.split()[-1])
                 name_x += ROW_LOGO_SIZE + 10
 
         name = row.player.gamertag
@@ -127,7 +137,7 @@ async def render_leaders_board(title: str, season_label: str, rows: Sequence[Lea
 
         val_str = str(row.value) if isinstance(row.value, int) else f"{row.value:.3f}".lstrip("0")
         val_w = draw.textlength(val_str, font=val_font)
-        draw.text((width - 56 - val_w, y + 2), val_str, font=val_font, fill=Theme.ACCENT)
+        draw.text((width - 56 - val_w, y + 2), val_str, font=val_font, fill=accent_color)
         if row.secondary:
             sec_w = draw.textlength(row.secondary, font=sec_font)
             draw.text((width - 56 - sec_w, y + 32), row.secondary, font=sec_font, fill=Theme.TEXT_MUTED)
