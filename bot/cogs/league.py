@@ -28,6 +28,7 @@ from bot.cogs.channel_updater import refresh_all_channels
 from bot.config import settings
 from bot.database import get_session
 from bot.graphics.game_result_graphic import render_game_result
+from bot.graphics.player_card import render_player_card
 from bot.graphics.playoff_bracket import render_playoff_bracket
 from bot.graphics.standings_graphic import render_standings
 from bot.graphics.team_card import render_leaders_board, render_team_card
