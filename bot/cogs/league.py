@@ -389,19 +389,6 @@ class LeagueCog(commands.Cog):
 
         await interaction.followup.send(file=discord.File(path))
 
-
-            embed = info_embed(f"{player.gamertag} — {s.name}")
-            if player.is_goalie:
-                embed.add_field(name="Record", value=f"{ps.wins}-{ps.losses}-{ps.ot_losses}", inline=True)
-                embed.add_field(name="GAA", value=f"{ps.gaa:.2f}", inline=True)
-                embed.add_field(name="SV%", value=f"{ps.save_pct:.3f}", inline=True)
-            else:
-                embed.add_field(name="GP", value=str(ps.games_played), inline=True)
-                embed.add_field(name="G", value=str(ps.goals), inline=True)
-                embed.add_field(name="A", value=str(ps.assists), inline=True)
-                embed.add_field(name="PTS", value=str(ps.points), inline=True)
-        await interaction.response.send_message(embed=embed)
-
     # ==================================================================
     # /league list
     # ==================================================================
