@@ -47,7 +47,21 @@ from bot.models import (
     User,
 )
 from bot.models.schedule import ScheduleStatus
-from bot.services.leaders_service import goals_leaders, points_leaders
+from bot.graphics.combined_leaders_board import render_combined_leaders_board
+from bot.services.leaders_service import (
+    assists_leaders,
+    blocked_shots_leaders,
+    faceoff_pct_leaders,
+    gaa_leaders,
+    goalie_leaders,
+    goals_leaders,
+    hits_leaders,
+    interceptions_leaders,
+    pim_leaders,
+    points_leaders,
+    shutouts_leaders,
+    takeaways_leaders,
+)
 from bot.services.league_settings import get_league_logo_url
 from bot.services.playoff_service import PlayoffError, advance_round, generate_bracket, get_bracket, record_series_result
 from bot.services.recap_generator import RecapContext, format_top_performers, generate_recap
