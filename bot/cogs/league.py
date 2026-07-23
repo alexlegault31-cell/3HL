@@ -693,7 +693,7 @@ class LeagueCog(commands.Cog):
             await refresh_all_channels(interaction.client, session)
         await interaction.followup.send(file=discord.File(path))
 
-    @refresh_group.command(name="stat-leaders", description="Manually re-post the stat leaders graphic")
+    @refresh_group.command(name="stat-leaders", description="Manually re-post the combined stat leaders graphic")
     @commissioner_only()
     async def refresh_stat_leaders(self, interaction: discord.Interaction, season: int | None = None):
         await interaction.response.defer()
@@ -703,11 +703,28 @@ class LeagueCog(commands.Cog):
             except SeasonNotFound as e:
                 await interaction.followup.send(embed=error_embed("Season error", str(e)))
                 return
-            rows = await points_leaders(session, s.id, limit=10)
-            if not rows:
+
+            categories = [
+                ("Points", await points_leaders(session, s.id, limit=5)),
+                ("Goals", await goals_leaders(session, s.id, limit=5)),
+                ("Assists", await assists_leaders(session, s.id, limit=5)),
+                ("Hits", await hits_leaders(session, s.id, limit=5)),
+                ("PIM", await pim_leaders(session, s.id, limit=5)),
+                ("Faceoff %", await faceoff_pct_leaders(session, s.id, limit=5)),
+                ("Takeaways", await takeaways_leaders(session, s.id, limit=5)),
+                ("Interceptions", await interceptions_leaders(session, s.id, limit=5)),
+                ("Blocked Shots", await blocked_shots_leaders(session, s.id, limit=5)),
+                ("GAA", await gaa_leaders(session, s.id, limit=5)),
+                ("Save %", await goalie_leaders(session, s.id, limit=5)),
+                ("Shutouts", await shutouts_leaders(session, s.id, limit=5)),
+            ]
+
+            if not any(rows for _, rows in categories):
                 await interaction.followup.send(embed=info_embed("No data", f"No stat data for {s.name} yet."))
                 return
-            path = await render_leaders_board("Points Leaders", s.name, rows, await get_league_logo_url(session, interaction.guild_id))
+
+            league_logo_url = await get_league_logo_url(session, interaction.guild_id)
+            path = await render_combined_leaders_board(s.name, categories, league_logo_url)
             await refresh_all_channels(interaction.client, session)
         await interaction.followup.send(file=discord.File(path))
 
