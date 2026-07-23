@@ -72,7 +72,11 @@ async def render_leaders_board(title: str, season_label: str, rows: Sequence[Lea
     width = 760
     row_h = 54
     header_h = 120
-    height = header_h + row_h * len(rows) + 30
+    # Always render at least one row's worth of height, even with zero
+    # data, so the "No data yet" placeholder has room to draw -- this is
+    # what lets this graphic always be returned instead of falling back
+    # to a plain text message when a season has no stats recorded yet.
+    height = header_h + row_h * max(len(rows), 1) + 30
     img = Image.new("RGB", (width, height), Theme.BG_DARK)
     draw = ImageDraw.Draw(img)
 
@@ -91,6 +95,12 @@ async def render_leaders_board(title: str, season_label: str, rows: Sequence[Lea
         img.paste(league_logo, (width - 40 - 56, 20), league_logo.split()[-1])
 
     draw.line([(40, header_h - 6), (width - 40, header_h - 6)], fill=Theme.BORDER, width=2)
+
+    if not rows:
+        draw.text((40, header_h + 20), "No data recorded yet this season.", font=row_font, fill=Theme.TEXT_MUTED)
+        out_path = GENERATED_DIR / f"leaders_{uuid.uuid4().hex[:8]}.png"
+        img.save(out_path)
+        return str(out_path)
 
     y = header_h + 6
     for row in rows:
