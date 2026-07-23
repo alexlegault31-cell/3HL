@@ -28,12 +28,14 @@ from bot.cogs.channel_updater import refresh_all_channels
 from bot.config import settings
 from bot.database import get_session
 from bot.graphics.game_result_graphic import render_game_result
+from bot.graphics.playoff_bracket import render_playoff_bracket
 from bot.graphics.standings_graphic import render_standings
 from bot.graphics.team_card import render_leaders_board, render_team_card
 from bot.models import (
     Forfeit,
     Game,
     GuildSetting,
+    PlayoffSeries,
     Player,
     PlayerSeason,
     PlayerTeamLink,
@@ -47,6 +49,7 @@ from bot.models import (
 from bot.models.schedule import ScheduleStatus
 from bot.services.leaders_service import goals_leaders, points_leaders
 from bot.services.league_settings import get_league_logo_url
+from bot.services.playoff_service import PlayoffError, advance_round, generate_bracket, get_bracket, record_series_result
 from bot.services.recap_generator import RecapContext, format_top_performers, generate_recap
 from bot.services.season_service import SeasonNotFound, resolve_season, set_active_season
 from bot.services.stat_importer import ImportError_, apply_team_season_delta, import_game, reverse_game
@@ -512,11 +515,23 @@ class LeagueCog(commands.Cog):
             league_logo_url = await get_league_logo_url(session, interaction.guild_id)
             graphic_path = await render_game_result(result.game, result.home_team, result.away_team, league_logo_url)
             result.game.result_graphic_path = graphic_path
+            series = await record_series_result(session, result.schedule, result.game)
+            series_status_text = None
+            if series is not None:
+                team_a = await session.get(Team, series.team_a_id)
+                team_b = await session.get(Team, series.team_b_id)
+                if series.winner_team_id is not None:
+                    winner = team_a if series.winner_team_id == series.team_a_id else team_b
+                    series_status_text = f"🏆 **{winner.name}** wins the {series.round_name} series {max(series.wins_a, series.wins_b)}-{min(series.wins_a, series.wins_b)}!"
+                else:
+                    series_status_text = f"{series.round_name}: **{team_a.name}** {series.wins_a} - {series.wins_b} **{team_b.name}**"
             await refresh_all_channels(interaction.client, session)
 
         embed = success_embed("Game imported", f"**{result.home_team.name} {result.game.home_score} - {result.game.away_score} {result.away_team.name}**")
         if recap_text:
             embed.add_field(name="Recap", value=recap_text, inline=False)
+        if series_status_text:
+            embed.add_field(name="Playoff Series", value=series_status_text, inline=False)
         await interaction.followup.send(embed=embed, file=discord.File(graphic_path))
         await self._post_to_results_channel(interaction, embed, graphic_path)
 
@@ -604,7 +619,21 @@ class LeagueCog(commands.Cog):
             league_logo_url = await get_league_logo_url(session, interaction.guild_id)
             graphic_path = await render_game_result(game, win_team, lose_team, league_logo_url)
 
+            series_status_text = None
+            if schedule and schedule.playoff_series_id:
+                series = await record_series_result(session, schedule, game)
+                if series is not None:
+                    team_a = await session.get(Team, series.team_a_id)
+                    team_b = await session.get(Team, series.team_b_id)
+                    if series.winner_team_id is not None:
+                        winner = team_a if series.winner_team_id == series.team_a_id else team_b
+                        series_status_text = f"🏆 **{winner.name}** wins the {series.round_name} series {max(series.wins_a, series.wins_b)}-{min(series.wins_a, series.wins_b)}!"
+                    else:
+                        series_status_text = f"{series.round_name}: **{team_a.name}** {series.wins_a} - {series.wins_b} **{team_b.name}**"
+
         embed = success_embed("Forfeit recorded", f"**{win_team.name}** defeats **{lose_team.name}** {win_score}-{lose_score} by forfeit.\n*Reason: {reason}*")
+        if series_status_text:
+            embed.add_field(name="Playoff Series", value=series_status_text, inline=False)
         await interaction.response.send_message(embed=embed, file=discord.File(graphic_path))
         await self._post_to_results_channel(interaction, embed, graphic_path)
 
@@ -713,14 +742,107 @@ class LeagueCog(commands.Cog):
 
     @refresh_group.command(name="playoffs", description="Re-post the playoff bracket")
     @commissioner_only()
-    async def refresh_playoffs(self, interaction: discord.Interaction):
-        # Honest scope note: playoff bracket graphics aren't built yet.
-        # This responds cleanly rather than faking a feature that doesn't
-        # exist -- a future update can wire this up to a real bracket
-        # system once playoff structure (series, rounds) is designed.
+    async def refresh_playoffs(self, interaction: discord.Interaction, season: int | None = None):
+        await interaction.response.defer()
+        async with get_session() as session:
+            try:
+                s = await resolve_season(session, season)
+            except SeasonNotFound as e:
+                await interaction.followup.send(embed=error_embed("Season error", str(e)))
+                return
+
+            rounds = await get_bracket(session, s.id)
+            if not rounds:
+                await interaction.followup.send(
+                    embed=info_embed("No bracket yet", f"No playoff bracket has been generated for {s.name}. Use `/league admin generate-playoffs` first.")
+                )
+                return
+
+            all_team_ids = {t_id for round_series in rounds for series in round_series for t_id in (series.team_a_id, series.team_b_id)}
+            teams_by_id = {t_id: await session.get(Team, t_id) for t_id in all_team_ids}
+            league_logo_url = await get_league_logo_url(session, interaction.guild_id)
+            path = await render_playoff_bracket(s.name, rounds, teams_by_id, league_logo_url)
+
+        await interaction.followup.send(file=discord.File(path))
+
+    # ==================================================================
+    # /league admin generate-playoffs, advance-round
+    # ==================================================================
+
+    @admin_group.command(name="generate-playoffs", description="Seed a single-elimination playoff bracket from the current standings")
+    @app_commands.describe(
+        num_teams="How many teams make the bracket -- must be a power of 2 (4, 8, 16...)",
+        best_of="Games per series -- must be odd (3, 5, 7...)",
+    )
+    @commissioner_only()
+    async def admin_generate_playoffs(self, interaction: discord.Interaction, num_teams: int, best_of: int = 5, season: int | None = None):
+        async with get_session() as session:
+            try:
+                s = await resolve_season(session, season)
+            except SeasonNotFound as e:
+                await interaction.response.send_message(embed=error_embed("Season error", str(e)), ephemeral=True)
+                return
+
+            existing = await get_bracket(session, s.id)
+            if existing:
+                await interaction.response.send_message(
+                    embed=error_embed("Bracket already exists", f"{s.name} already has a playoff bracket. There's currently no command to reset one -- ask for that if you need it."),
+                    ephemeral=True,
+                )
+                return
+
+            entries = (
+                await session.execute(select(StandingsEntry).where(StandingsEntry.season_id == s.id).order_by(StandingsEntry.rank))
+            ).scalars().all()
+            if len(entries) < num_teams:
+                await interaction.response.send_message(
+                    embed=error_embed("Not enough teams", f"{s.name}'s standings only has {len(entries)} teams, but you asked for {num_teams}."),
+                    ephemeral=True,
+                )
+                return
+
+            seeded_team_ids = [e.team_id for e in entries[:num_teams]]
+
+            try:
+                created = await generate_bracket(session, s.id, seeded_team_ids, best_of)
+            except PlayoffError as e:
+                await interaction.response.send_message(embed=error_embed("Couldn't generate bracket", str(e)), ephemeral=True)
+                return
+
+            lines = []
+            for series in created:
+                team_a = await session.get(Team, series.team_a_id)
+                team_b = await session.get(Team, series.team_b_id)
+                lines.append(f"({series.seed_a}) {team_a.name} vs ({series.seed_b}) {team_b.name}")
+
         await interaction.response.send_message(
-            embed=info_embed("Not yet available", "Playoff bracket generation hasn't been built yet. This command is a placeholder for a future update.")
+            embed=success_embed(f"{created[0].round_name} bracket generated", "\n".join(lines) + f"\n\nBest of {best_of}. Enter games with `/league admin submit-game` as usual.")
         )
+
+    @admin_group.command(name="advance-round", description="Advance to the next playoff round once all series in the current round are decided")
+    @app_commands.describe(round_order="Which round number to advance from (1 = first round, 2 = second, etc.)")
+    @commissioner_only()
+    async def admin_advance_round(self, interaction: discord.Interaction, round_order: int, season: int | None = None):
+        async with get_session() as session:
+            try:
+                s = await resolve_season(session, season)
+            except SeasonNotFound as e:
+                await interaction.response.send_message(embed=error_embed("Season error", str(e)), ephemeral=True)
+                return
+
+            try:
+                created = await advance_round(session, s.id, round_order)
+            except PlayoffError as e:
+                await interaction.response.send_message(embed=error_embed("Can't advance yet", str(e)), ephemeral=True)
+                return
+
+            lines = []
+            for series in created:
+                team_a = await session.get(Team, series.team_a_id)
+                team_b = await session.get(Team, series.team_b_id)
+                lines.append(f"{team_a.name} vs {team_b.name}")
+
+        await interaction.response.send_message(embed=success_embed(f"{created[0].round_name} generated", "\n".join(lines)))
 
     # ==================================================================
     # /league schedule
