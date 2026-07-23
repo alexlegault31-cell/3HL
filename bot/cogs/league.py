@@ -362,25 +362,33 @@ class LeagueCog(commands.Cog):
 
         await interaction.response.send_message(embed=success_embed("Player removed", f"**{gamertag}** removed from their club for {s.name}."))
 
-    @player_group.command(name="stats", description="View a player's season stats")
+        @player_group.command(name="stats", description="View a player's season stats card")
     @app_commands.describe(gamertag="Player gamertag (defaults to your linked account)", season="Season number (defaults to active)")
     async def player_stats(self, interaction: discord.Interaction, gamertag: str | None = None, season: int | None = None):
+        await interaction.response.defer()
         async with get_session() as session:
             player = await self._resolve_player(session, interaction, gamertag)
             if player is None:
-                await interaction.response.send_message(
-                    embed=error_embed("No player found", "Provide a gamertag or link your account with `/player link`."), ephemeral=True
+                await interaction.followup.send(
+                    embed=error_embed("No player found", "Provide a gamertag or link your account with `/league player add` / linking your account first.")
                 )
                 return
             try:
                 s = await resolve_season(session, season)
             except SeasonNotFound as e:
-                await interaction.response.send_message(embed=error_embed("Season error", str(e)), ephemeral=True)
+                await interaction.followup.send(embed=error_embed("Season error", str(e)))
                 return
+
             ps = await session.scalar(select(PlayerSeason).where(PlayerSeason.player_id == player.id, PlayerSeason.season_id == s.id))
             if ps is None:
-                await interaction.response.send_message(embed=info_embed("No stats", f"No stats for {player.gamertag} in {s.name}."))
+                await interaction.followup.send(embed=info_embed("No stats", f"No stats for {player.gamertag} in {s.name}."))
                 return
+
+            team = await session.get(Team, ps.team_id) if ps.team_id else None
+            path = await render_player_card(player, ps, team, s.name)
+
+        await interaction.followup.send(file=discord.File(path))
+
 
             embed = info_embed(f"{player.gamertag} — {s.name}")
             if player.is_goalie:
