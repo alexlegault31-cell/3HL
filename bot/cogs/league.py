@@ -52,7 +52,7 @@ from bot.services.league_settings import get_league_logo_url
 from bot.services.playoff_service import PlayoffError, advance_round, generate_bracket, get_bracket, record_series_result
 from bot.services.recap_generator import RecapContext, format_top_performers, generate_recap
 from bot.services.season_service import SeasonNotFound, resolve_season, set_active_season
-from bot.services.stat_importer import ImportError_, apply_team_season_delta, import_game, reverse_game
+from bot.services.stat_importer import ImportError_, apply_team_season_delta, find_pending_schedule_for_matchup, import_game, reverse_game
 from bot.services.standings_service import recompute_standings
 from bot.utils.checks import commissioner_only, gm_only
 from bot.utils.embeds import error_embed, info_embed, success_embed
