@@ -1,7 +1,4 @@
-"""`/leaders <category>` -- always returns a graphic, even with zero data
-(shows a clean "No data yet" placeholder inside the image itself rather
-than falling back to a text message). Categories cover the full range of
-stats EA's API provides, not just goals/assists/points."""
+"""`/leaders <category>` -- always returns a graphic, even with zero data."""
 from __future__ import annotations
 
 from typing import Literal
@@ -26,7 +23,7 @@ from bot.services.leaders_service import (
     shutouts_leaders,
     takeaways_leaders,
 )
-from bot.services.league_settings import get_league_logo_url
+from bot.services.league_settings import get_league_background_url, get_league_logo_url
 from bot.services.season_service import SeasonNotFound, resolve_season
 from bot.utils.embeds import error_embed
 
@@ -46,18 +43,8 @@ CATEGORY_FUNCS = {
 }
 
 CategoryLiteral = Literal[
-    "goals",
-    "assists",
-    "points",
-    "hits",
-    "pim",
-    "faceoff_pct",
-    "takeaways",
-    "interceptions",
-    "blocked_shots",
-    "gaa",
-    "goalie",
-    "shutouts",
+    "goals", "assists", "points", "hits", "pim", "faceoff_pct",
+    "takeaways", "interceptions", "blocked_shots", "gaa", "goalie", "shutouts",
 ]
 
 
@@ -67,12 +54,7 @@ class LeadersCog(commands.Cog):
 
     @app_commands.command(name="leaders", description="View league stat leaders")
     @app_commands.describe(category="Stat category", season="Season number (defaults to active)")
-    async def leaders(
-        self,
-        interaction: discord.Interaction,
-        category: CategoryLiteral,
-        season: int | None = None,
-    ):
+    async def leaders(self, interaction: discord.Interaction, category: CategoryLiteral, season: int | None = None):
         await interaction.response.defer()
         func, title = CATEGORY_FUNCS[category]
 
@@ -84,11 +66,9 @@ class LeadersCog(commands.Cog):
                 return
 
             rows = await func(session, s.id, limit=10)
-            # Always render the graphic, even with zero rows -- it shows
-            # a clean "No data recorded yet" placeholder inside the image
-            # itself instead of falling back to a plain text message.
             league_logo_url = await get_league_logo_url(session, interaction.guild_id)
-            path = await render_leaders_board(title, s.name, rows, league_logo_url)
+            background_url = await get_league_background_url(session, interaction.guild_id)
+            path = await render_leaders_board(title, s.name, rows, league_logo_url, background_url)
 
         await interaction.followup.send(file=discord.File(path))
 
