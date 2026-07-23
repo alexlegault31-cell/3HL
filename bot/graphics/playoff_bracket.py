@@ -1,19 +1,14 @@
 """Renders a single-elimination playoff bracket -- rounds arranged left
 to right, each series shown as a small card with both teams, the
-series score, and real club logos where available.
-
-Text-bleed fix: team names are now measured and truncated with an
-ellipsis if they'd overflow the box width, instead of being drawn at
-full length regardless of available space (which is what caused long
-team names to run off the edge of the image in an earlier version)."""
+series score, and real club logos where available."""
 from __future__ import annotations
 
 import uuid
 
-from PIL import Image, ImageDraw
+from PIL import ImageDraw
 
 from bot.graphics.logo_fetch import get_team_logo
-from bot.graphics.theme import GENERATED_DIR, Theme, load_font
+from bot.graphics.theme import GENERATED_DIR, Theme, load_font, prepare_canvas
 from bot.models import PlayoffSeries, Team
 
 ROUND_WIDTH = 300
@@ -21,7 +16,8 @@ SERIES_HEIGHT = 100
 SERIES_GAP = 24
 LOGO_SIZE = 26
 PADDING = 40
-SCORE_RESERVED_WIDTH = 36  # space reserved on the right of each row for the win-count digit
+BANNER_H = 90
+SCORE_RESERVED_WIDTH = 36
 
 
 async def render_playoff_bracket(
@@ -29,31 +25,32 @@ async def render_playoff_bracket(
     rounds: list[list[PlayoffSeries]],
     teams_by_id: dict[int, Team],
     league_logo_url: str | None = None,
+    background_url: str | None = None,
+    accent_color: tuple[int, int, int] = Theme.ACCENT,
 ) -> str:
     if not rounds:
         raise ValueError("render_playoff_bracket called with no rounds")
 
     first_round_series_count = len(rounds[0])
-    height = PADDING * 2 + 80 + first_round_series_count * (SERIES_HEIGHT + SERIES_GAP)
+    height = PADDING * 2 + BANNER_H + first_round_series_count * (SERIES_HEIGHT + SERIES_GAP)
     width = PADDING * 2 + len(rounds) * ROUND_WIDTH
 
-    img = Image.new("RGB", (width, height), Theme.BG_DARK)
-    draw = ImageDraw.Draw(img)
+    img, draw = await prepare_canvas(width, height, accent_color, background_url, banner_height=BANNER_H + PADDING)
 
     title_font = load_font("Black", 34)
-    sub_font = load_font("Regular", 20)
+    sub_font = load_font("Bold", 20)
     round_font = load_font("Bold", 16)
     team_font = load_font("Regular", 16)
     score_font = load_font("Black", 20)
 
-    draw.text((PADDING, 20), "PLAYOFF BRACKET", font=title_font, fill=Theme.TEXT_PRIMARY)
-    draw.text((PADDING, 58), season_label, font=sub_font, fill=Theme.TEXT_SECONDARY)
+    draw.text((PADDING, 20), "PLAYOFF BRACKET", font=title_font, fill=(255, 255, 255))
+    draw.text((PADDING, 58), season_label, font=sub_font, fill=(210, 216, 230))
 
     league_logo = await get_team_logo(league_logo_url, (56, 56))
     if league_logo is not None:
         img.paste(league_logo, (width - PADDING - 56, 16), league_logo.split()[-1])
 
-    top_y = PADDING + 80
+    top_y = PADDING + BANNER_H
     centers: list[list[float]] = []
     for round_index, series_list in enumerate(rounds):
         round_centers = []
@@ -77,7 +74,7 @@ async def render_playoff_bracket(
             box_w = ROUND_WIDTH - 40
 
             draw.rounded_rectangle(
-                [(x, box_y), (x + box_w, box_y + SERIES_HEIGHT)], radius=8, fill=Theme.BG_PANEL, outline=Theme.BORDER, width=1
+                [(x, box_y), (x + box_w, box_y + SERIES_HEIGHT)], radius=8, fill=Theme.BG_PANEL, outline=accent_color, width=1
             )
 
             team_a = teams_by_id.get(series.team_a_id)
@@ -94,9 +91,9 @@ async def render_playoff_bracket(
             if round_index < len(rounds) - 1:
                 next_center = centers[round_index + 1][i // 2]
                 connector_x = x + box_w
-                draw.line([(connector_x, center_y), (connector_x + 15, center_y)], fill=Theme.BORDER, width=2)
-                draw.line([(connector_x + 15, center_y), (connector_x + 15, next_center)], fill=Theme.BORDER, width=2)
-                draw.line([(connector_x + 15, next_center), (connector_x + 30, next_center)], fill=Theme.BORDER, width=2)
+                draw.line([(connector_x, center_y), (connector_x + 15, center_y)], fill=accent_color, width=2)
+                draw.line([(connector_x + 15, center_y), (connector_x + 15, next_center)], fill=accent_color, width=2)
+                draw.line([(connector_x + 15, next_center), (connector_x + 30, next_center)], fill=accent_color, width=2)
 
     out_path = GENERATED_DIR / f"bracket_{uuid.uuid4().hex[:8]}.png"
     img.save(out_path)
@@ -104,9 +101,6 @@ async def render_playoff_bracket(
 
 
 def _truncate_to_fit(draw: ImageDraw.ImageDraw, text: str, font, max_width: float) -> str:
-    """Shortens text with a trailing ellipsis until it fits max_width --
-    this is the actual fix for team names bleeding off the edge of the
-    bracket image. Falls back gracefully for very short max_width."""
     if draw.textlength(text, font=font) <= max_width:
         return text
     ellipsis = "…"
@@ -121,15 +115,12 @@ async def _draw_team_row(draw, img, x, y, box_w, team, seed, wins, won, team_fon
     if team is not None:
         logo = await get_team_logo(team.logo_url, (LOGO_SIZE, LOGO_SIZE))
         if logo is not None:
-            img.paste(logo, (int(name_x), int(y - 2)), logo.split()[-1])
+            img.paste(logo, (int(name_x), int(y - 4)), logo.split()[-1])
             name_x += LOGO_SIZE + 6
 
     seed_str = f"({seed}) " if seed else ""
     raw_name = f"{seed_str}{team.name}" if team else "TBD"
 
-    # Reserve space on the right for the score digit + a small margin, and
-    # never let the name draw past that boundary -- this is what actually
-    # stops long team names from bleeding off the image.
     available_width = (x + box_w) - name_x - SCORE_RESERVED_WIDTH - 10
     display_name = _truncate_to_fit(draw, raw_name, team_font, max(available_width, 20))
 
