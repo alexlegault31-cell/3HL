@@ -22,7 +22,21 @@ from bot.config import settings
 from bot.graphics.standings_graphic import render_standings
 from bot.graphics.team_card import render_leaders_board
 from bot.models import GuildSetting, StandingsEntry, Team
-from bot.services.leaders_service import points_leaders
+from bot.graphics.combined_leaders_board import render_combined_leaders_board
+from bot.services.leaders_service import (
+    assists_leaders,
+    blocked_shots_leaders,
+    faceoff_pct_leaders,
+    gaa_leaders,
+    goalie_leaders,
+    goals_leaders,
+    hits_leaders,
+    interceptions_leaders,
+    pim_leaders,
+    points_leaders,
+    shutouts_leaders,
+    takeaways_leaders,
+)
 from bot.services.league_settings import get_league_logo_url
 from bot.services.season_service import SeasonNotFound, get_active_season
 
