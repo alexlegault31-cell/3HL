@@ -1,5 +1,4 @@
-"""`/standings` -- always posts the visual standings graphic (no text
-mode), including the league-wide logo set via /league admin add-logo."""
+"""`/standings` -- always posts the visual standings graphic."""
 from __future__ import annotations
 
 import discord
@@ -10,7 +9,7 @@ from sqlalchemy import select
 from bot.database import get_session
 from bot.graphics.standings_graphic import render_standings
 from bot.models import StandingsEntry, Team
-from bot.services.league_settings import get_league_logo_url
+from bot.services.league_settings import get_league_background_url, get_league_logo_url
 from bot.services.season_service import SeasonNotFound, resolve_season
 from bot.utils.embeds import error_embed, info_embed
 
@@ -38,7 +37,8 @@ class StandingsCog(commands.Cog):
 
             rows = [(e, await session.get(Team, e.team_id)) for e in entries]
             league_logo_url = await get_league_logo_url(session, interaction.guild_id)
-            path = await render_standings(s.name, rows, league_logo_url)
+            background_url = await get_league_background_url(session, interaction.guild_id)
+            path = await render_standings(s.name, rows, league_logo_url, background_url)
 
         await interaction.followup.send(file=discord.File(path))
 
