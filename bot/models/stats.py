@@ -85,6 +85,7 @@ class TeamGameStat(Base, IDMixin, TimestampMixin):
     pim: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     powerplay_goals: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     powerplay_opportunities: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    time_on_attack: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
 
     game: Mapped["Game"] = relationship()
     team: Mapped["Team"] = relationship()
