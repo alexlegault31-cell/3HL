@@ -54,7 +54,7 @@ from bot.models import (
     TeamSeason,
 )
 from bot.models.schedule import ScheduleStatus
-from bot.services.chelstats_client import ChelStatsClient, MatchDetail
+from bot.services.chelstats_client import ChelStatsClient, MatchDetail, combine_matches
 from bot.services.standings_service import recompute_standings
 
 log = logging.getLogger(__name__)
@@ -72,6 +72,7 @@ class ImportResult:
     away_team: Team
     player_lines: list[PlayerGameStat]
     goalie_lines: list[GoalieGameStat]
+    was_merged: bool = False
 
 
 async def import_game(
@@ -81,6 +82,7 @@ async def import_game(
     game_number: int,
     imported_by_discord_id: int,
     client: Optional[ChelStatsClient] = None,
+    disable_auto_merge: bool = False,
 ) -> ImportResult:
     client = client or ChelStatsClient()
 
@@ -105,13 +107,21 @@ async def import_game(
     if not away_ts.club_id:
         raise ImportError_(f"{away_team_obj.name} has no linked Club ID. Run `/league club swap` first.")
 
-    match_detail = await _find_matching_match(client, home_ts.club_id, away_ts.club_id)
+    # Playoff games skip auto-merge entirely: teams can legitimately play
+    # each other multiple times in one night in a playoff series (unlike
+    # the regular season schedule, which never repeats a matchup twice in
+    # a row), so "two close-together matches" isn't a reliable lagout
+    # signal there. The intended playoff workflow is submitting each game
+    # right after it's played, which sidesteps the ambiguity entirely.
+    allow_auto_merge = (not schedule.is_playoffs) and (not disable_auto_merge)
+    match_detail = await _find_matching_match(client, home_ts.club_id, away_ts.club_id, allow_auto_merge=allow_auto_merge)
     if match_detail is None:
         raise ImportError_(
             f"Couldn't find a recent EASHL match between {home_team_obj.name} "
             f"(Club {home_ts.club_id}) and {away_team_obj.name} (Club {away_ts.club_id}). "
             f"Make sure the game has been played and try again in a few minutes."
         )
+    was_merged = "+" in match_detail.match_id  # combine_matches joins match_ids with "+"
 
     existing = await session.scalar(select(Game).where(Game.external_match_id == match_detail.match_id))
     if existing is not None:
@@ -261,6 +271,7 @@ async def import_game(
         away_team=away_team,  # type: ignore[arg-type]
         player_lines=player_lines,
         goalie_lines=goalie_lines,
+        was_merged=was_merged,
     )
 
 
@@ -381,7 +392,12 @@ async def _get_team_season(session: AsyncSession, team_id: int, season_id: int) 
     return ts
 
 
-async def _find_matching_match(client: ChelStatsClient, home_club_id: int, away_club_id: int) -> Optional[MatchDetail]:
+LAGOUT_MERGE_WINDOW_MINUTES = 60
+
+
+async def _find_matching_match(
+    client: ChelStatsClient, home_club_id: int, away_club_id: int, *, allow_auto_merge: bool = True
+) -> Optional[MatchDetail]:
     home_matches = await client.get_recent_club_matches(home_club_id)
     away_match_ids = {m.match_id for m in await client.get_recent_club_matches(away_club_id)}
 
@@ -389,7 +405,31 @@ async def _find_matching_match(client: ChelStatsClient, home_club_id: int, away_
     if not candidates:
         return None
     candidates.sort(key=lambda m: m.timestamp, reverse=True)
-    return candidates[0]
+
+    most_recent = candidates[0]
+    if not allow_auto_merge:
+        return most_recent
+
+    # Two regular-season matches between the SAME two clubs, close
+    # together in time, are never two separate legitimate games -- the
+    # schedule would never pit them against each other twice in one
+    # night. That signature (not a specific "disconnect" flag, since EA's
+    # API doesn't expose one) is what identifies a lagout/reconnect split
+    # into multiple match records. Walk backward from the most recent
+    # match, absorbing any immediately-preceding match within the merge
+    # window, and combine them into one game if more than one is found.
+    to_merge = [most_recent]
+    for candidate in candidates[1:]:
+        last = to_merge[-1]
+        gap_seconds = last.timestamp - candidate.timestamp
+        if 0 <= gap_seconds <= LAGOUT_MERGE_WINDOW_MINUTES * 60:
+            to_merge.append(candidate)
+        else:
+            break  # candidates are sorted newest-first, so the gap only grows from here
+
+    if len(to_merge) == 1:
+        return most_recent
+    return combine_matches(to_merge)
 
 
 async def _resolve_player(session: AsyncSession, gamertag: str, external_id: Optional[str], is_goalie: bool) -> Player:
