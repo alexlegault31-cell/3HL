@@ -30,8 +30,9 @@ async def render_player_card(
     role_font = load_font("Bold", 14)
 
     draw.text((32, 24), player.gamertag, font=name_font, fill=(255, 255, 255))
-    team_line = f"{team.name} • {season_label}" if team else season_label
-    draw.text((34, 74), team_line, font=sub_font, fill=(210, 216, 230))
+    role = "Goalie" if player.is_goalie else "Skater"
+    team_line = f"{team.name} • {season_label} • {role}" if team else f"{season_label} • {role}"
+    draw.text((34, 76), team_line, font=sub_font, fill=(210, 216, 230))
 
     logo = await get_team_logo(team.logo_url if team else None, (LOGO_SIZE, LOGO_SIZE))
     if logo is not None:
@@ -45,9 +46,6 @@ async def render_player_card(
     league_logo = await get_team_logo(league_logo_url, (44, 44))
     if league_logo is not None:
         img.paste(league_logo, (WIDTH - 32 - LOGO_SIZE - 56, 34), league_logo.split()[-1])
-
-    role = "Goalie" if player.is_goalie else "Skater"
-    draw.text((34, BANNER_H - 26), role, font=role_font, fill=(210, 216, 230))
 
     if player.is_goalie:
         stats = [
