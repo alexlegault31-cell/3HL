@@ -200,6 +200,8 @@ async def import_game(
                 goals_against=box.goals_against,
                 minutes_played=box.minutes_played,
                 shutout=(box.goals_against == 0 and box.minutes_played > 0),
+                poke_checks=box.poke_checks,
+                desperation_saves=box.desperation_saves,
             )
             session.add(line)
             goalie_lines.append(line)
@@ -227,6 +229,8 @@ async def import_game(
                 pass_attempts=box.pass_attempts,
                 passes_completed=box.passes_completed,
                 position=box.position or None,
+                minutes_played=box.minutes_played,
+                time_with_puck=box.time_with_puck,
             )
             session.add(line)
             player_lines.append(line)
