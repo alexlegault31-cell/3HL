@@ -13,10 +13,23 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.config import settings
+from bot.graphics.combined_leaders_board import render_combined_leaders_board
 from bot.graphics.standings_graphic import render_standings
-from bot.graphics.team_card import render_leaders_board
 from bot.models import GuildSetting, StandingsEntry, Team
-from bot.services.leaders_service import points_leaders
+from bot.services.leaders_service import (
+    assists_leaders,
+    blocked_shots_leaders,
+    faceoff_pct_leaders,
+    gaa_leaders,
+    goalie_leaders,
+    goals_leaders,
+    hits_leaders,
+    interceptions_leaders,
+    pim_leaders,
+    points_leaders,
+    shutouts_leaders,
+    takeaways_leaders,
+)
 from bot.services.league_settings import get_league_background_url, get_league_logo_url
 from bot.services.season_service import SeasonNotFound, get_active_season
 
@@ -56,15 +69,28 @@ async def refresh_leaders_channel(bot: commands.Bot, session: AsyncSession) -> N
     except SeasonNotFound:
         return
 
-    rows = await points_leaders(session, season.id, limit=10)
-    if not rows:
+    categories = [
+        ("Points", await points_leaders(session, season.id, limit=5)),
+        ("Goals", await goals_leaders(session, season.id, limit=5)),
+        ("Assists", await assists_leaders(session, season.id, limit=5)),
+        ("Hits", await hits_leaders(session, season.id, limit=5)),
+        ("PIM", await pim_leaders(session, season.id, limit=5)),
+        ("Faceoff %", await faceoff_pct_leaders(session, season.id, limit=5)),
+        ("Takeaways", await takeaways_leaders(session, season.id, limit=5)),
+        ("Interceptions", await interceptions_leaders(session, season.id, limit=5)),
+        ("Blocked Shots", await blocked_shots_leaders(session, season.id, limit=5)),
+        ("GAA", await gaa_leaders(session, season.id, limit=5)),
+        ("Save %", await goalie_leaders(session, season.id, limit=5)),
+        ("Shutouts", await shutouts_leaders(session, season.id, limit=5)),
+    ]
+    if not any(rows for _, rows in categories):
         return
 
     channel = bot.get_channel(settings.channel_stat_leaders)
     league_logo_url = await get_league_logo_url(session, channel.guild.id) if channel else None
     background_url = await get_league_background_url(session, channel.guild.id) if channel else None
 
-    path = await render_leaders_board("Points Leaders", season.name, rows, league_logo_url, background_url)
+    path = await render_combined_leaders_board(season.name, categories, league_logo_url, background_url)
     await _post_or_edit(bot, session, settings.channel_stat_leaders, "leaders", file_path=path)
 
 
