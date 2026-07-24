@@ -306,6 +306,8 @@ async def reverse_game(session: AsyncSession, game: Game) -> None:
             ps.goals_against -= line.goals_against
             ps.shutouts -= 1 if line.shutout else 0
             ps.minutes_played -= line.minutes_played
+            ps.poke_checks -= line.poke_checks
+            ps.desperation_saves -= line.desperation_saves
 
     schedule = None
     if game.schedule_id:
@@ -462,6 +464,8 @@ async def _apply_goalie_season_delta(session: AsyncSession, player_id: int, seas
     ps.goals_against += line.goals_against
     ps.shutouts += 1 if line.shutout else 0
     ps.minutes_played += line.minutes_played
+    ps.poke_checks += line.poke_checks
+    ps.desperation_saves += line.desperation_saves
 
 
 async def apply_team_season_delta(
