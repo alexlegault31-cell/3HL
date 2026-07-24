@@ -1,4 +1,3 @@
-
 """
 `Team` is the franchise-level, season-independent identity (e.g. "Italy").
 `TeamSeason` is the per-season participation row that actually carries the
@@ -49,16 +48,18 @@ class TeamSeason(Base, IDMixin, TimestampMixin):
     club_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True, index=True)
     club_name_cache: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
 
-    wins: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    wins: Mapped[int] = mapped_column(Integer, default=0, nullable=False)  # ALL wins (regulation + OT combined)
+    ot_wins: Mapped[int] = mapped_column(Integer, default=0, nullable=False)  # subset of `wins` that happened in OT -- for display only, never subtracted from `wins`
     losses: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     ot_losses: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     points: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     goals_for: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     goals_against: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
-    # Last 10 results as a string of "W"/"L"/"O", most recent last. Cheap to
-    # store/update incrementally instead of recomputing from game history.
-    streak_type: Mapped[Optional[str]] = mapped_column(String(1), nullable=True)  # W/L/O
+    # Last 10 results as a string of "W"/"T"/"L"/"O" (T = OT win, O = OT
+    # loss), most recent last. Cheap to store/update incrementally instead
+    # of recomputing from game history.
+    streak_type: Mapped[Optional[str]] = mapped_column(String(1), nullable=True)  # W/T/L/O
     streak_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     last_10: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
 
@@ -67,6 +68,9 @@ class TeamSeason(Base, IDMixin, TimestampMixin):
 
     @property
     def games_played(self) -> int:
+        # Unchanged from before -- ot_wins is a SUBSET of wins, not counted
+        # separately, so this still matches every other consumer of this
+        # property (standings, etc.) exactly as it worked before.
         return self.wins + self.losses + self.ot_losses
 
     @property
@@ -75,4 +79,3 @@ class TeamSeason(Base, IDMixin, TimestampMixin):
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<TeamSeason team_id={self.team_id} season_id={self.season_id} {self.wins}-{self.losses}-{self.ot_losses}>"
-
