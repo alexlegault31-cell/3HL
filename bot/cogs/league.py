@@ -8,10 +8,12 @@ from __future__ import annotations
 
 import datetime as dt
 
+import difflib
+
 import discord
 from discord import app_commands
 from discord.ext import commands
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from bot.cogs.channel_updater import refresh_all_channels
 from bot.config import settings
@@ -27,10 +29,13 @@ from bot.graphics.team_card import render_team_card
 from bot.models import (
     Forfeit,
     Game,
+    GoalieGameStat,
     GuildSetting,
     Player,
+    PlayerGameStat,
     PlayerSeason,
     PlayerTeamLink,
+    PlayoffSeries,
     ScheduleGame,
     Season,
     StandingsEntry,
@@ -172,6 +177,46 @@ class LeagueCog(commands.Cog):
                 f"End date: {season.end_date or '—'}",
             )
         await interaction.response.send_message(embed=embed)
+
+    @season_group.command(name="wipe", description="PERMANENTLY delete a season and everything tied to it (games, stats, standings, schedule, playoffs)")
+    @app_commands.describe(number="Season number to wipe", confirm="Type the season's exact name to confirm -- this cannot be undone")
+    @commissioner_only()
+    async def season_wipe(self, interaction: discord.Interaction, number: int, confirm: str):
+        async with get_session() as session:
+            season = await session.scalar(select(Season).where(Season.number == number))
+            if season is None:
+                await interaction.response.send_message(embed=error_embed("Not found", f"No season numbered {number}."), ephemeral=True)
+                return
+
+            if confirm.strip().lower() != season.name.strip().lower():
+                await interaction.response.send_message(
+                    embed=error_embed(
+                        "Confirmation didn't match",
+                        f"Type the season's exact name (`{season.name}`) in the `confirm` field to proceed. Nothing was deleted.",
+                    ),
+                    ephemeral=True,
+                )
+                return
+
+            season_id = season.id
+            season_name = season.name
+            # Explicit deletes in dependency order rather than relying on
+            # DB-level cascade -- safer and doesn't depend on assuming
+            # every foreign key was set up with ON DELETE CASCADE.
+            await session.execute(delete(PlayerGameStat).where(PlayerGameStat.season_id == season_id))
+            await session.execute(delete(GoalieGameStat).where(GoalieGameStat.season_id == season_id))
+            await session.execute(delete(TeamGameStat).where(TeamGameStat.season_id == season_id))
+            await session.execute(delete(Game).where(Game.season_id == season_id))
+            await session.execute(delete(PlayoffSeries).where(PlayoffSeries.season_id == season_id))
+            await session.execute(delete(ScheduleGame).where(ScheduleGame.season_id == season_id))
+            await session.execute(delete(StandingsEntry).where(StandingsEntry.season_id == season_id))
+            await session.execute(delete(TeamSeason).where(TeamSeason.season_id == season_id))
+            await session.execute(delete(PlayerSeason).where(PlayerSeason.season_id == season_id))
+            await session.delete(season)
+
+        await interaction.response.send_message(
+            embed=success_embed("Season wiped", f"**{season_name}** and all of its games, stats, standings, schedule, and playoff data have been permanently deleted.")
+        )
 
     # ==================================================================
     # /league club
@@ -455,19 +500,37 @@ class LeagueCog(commands.Cog):
         await interaction.followup.send(file=discord.File(path))
 
     @player_group.command(name="link", description="Link your Discord account to your EA gamertag")
-    @app_commands.describe(gamertag="Your EA gamertag")
-    async def player_link(self, interaction: discord.Interaction, gamertag: str):
+    @app_commands.describe(gamertag="Your EA gamertag", confirm="Set true to confirm creating a brand-new player if a similar name already exists")
+    async def player_link(self, interaction: discord.Interaction, gamertag: str, confirm: bool = False):
         async with get_session() as session:
             player = await session.scalar(select(Player).where(Player.gamertag.ilike(gamertag)))
+
             if player is None:
-                await interaction.response.send_message(
-                    embed=error_embed(
-                        "Unknown gamertag",
-                        f"No player named **{gamertag}** exists yet -- they need to be added to a club first with `/league player add` before you can link to them.",
-                    ),
-                    ephemeral=True,
-                )
-                return
+                # No exact match. If something close already exists, this
+                # is more likely a typo of a real player than a genuinely
+                # new one -- ask for explicit confirmation before creating
+                # a duplicate Player row for what might be the same person.
+                all_gamertags = (await session.execute(select(Player.gamertag))).scalars().all()
+                suggestions = difflib.get_close_matches(gamertag, all_gamertags, n=3, cutoff=0.6)
+                if suggestions and not confirm:
+                    suggestion_text = ", ".join(f"**{s}**" for s in suggestions)
+                    await interaction.response.send_message(
+                        embed=error_embed(
+                            "Similar name found",
+                            f"No player named exactly **{gamertag}** exists, but found: {suggestion_text}. "
+                            f"If one of those is you, use that exact spelling. If you're sure **{gamertag}** is a "
+                            f"different, genuinely new player, run this again with `confirm:True`.",
+                        ),
+                        ephemeral=True,
+                    )
+                    return
+                # Pre-registers this gamertag before they've played a
+                # single game. is_goalie is an unconfirmed guess (False)
+                # until their first real game import corrects it
+                # automatically from EA's actual data.
+                player = Player(gamertag=gamertag, is_goalie=False)
+                session.add(player)
+                await session.flush()
 
             existing_user = await session.scalar(select(User).where(User.discord_id == interaction.user.id))
             if existing_user is None:
