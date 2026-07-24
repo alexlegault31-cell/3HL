@@ -1,4 +1,4 @@
-"""
+            """
 Consolidated `/league` command tree: `/league season`, `/league club`,
 `/league player`, `/league list`, `/league admin`, `/league refresh`,
 `/league schedule`, plus top-level `/league postpone-game`,
@@ -39,6 +39,7 @@ from bot.models import (
 from bot.models.schedule import ScheduleStatus
 from bot.services.game_log_service import get_goalie_game_log, get_skater_game_log, get_team_recent_results
 from bot.services.roster_service import get_team_roster
+from bot.services.unlinked_players_service import find_unlinked_players_in_game
 from bot.services.leaders_service import (
     assists_leaders,
     blocked_shots_leaders,
@@ -642,6 +643,8 @@ class LeagueCog(commands.Cog):
                 else:
                     series_status_text = f"{series.round_name}: **{team_a.name}** {series.wins_a} - {series.wins_b} **{team_b.name}**"
 
+            unlinked = await find_unlinked_players_in_game(session, result.game.id)
+
             await refresh_all_channels(interaction.client, session)
 
         embed = success_embed("Game imported", f"**{result.home_team.name} {result.game.home_score} - {result.game.away_score} {result.away_team.name}**")
@@ -649,6 +652,9 @@ class LeagueCog(commands.Cog):
             embed.add_field(name="Recap", value=recap_text, inline=False)
         if series_status_text:
             embed.add_field(name="Playoff Series", value=series_status_text, inline=False)
+        if unlinked:
+            lines = "\n".join(f"• **{u.gamertag}**, played this game with {u.team_name}." for u in unlinked)
+            embed.add_field(name="⚠️ Unlinked Players Found", value=lines, inline=False)
         await interaction.followup.send(embed=embed, file=discord.File(graphic_path))
         await self._post_to_results_channel(interaction, embed, graphic_path)
 
