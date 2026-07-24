@@ -1,77 +1,198 @@
-"""Renders team profile cards (/league club stats) and stat leader boards
-(/leaders ...), with real club crests and a gradient banner (or custom
-background photo) instead of a flat dark card."""
+"""Renders the club stats card for /league club stats -- logo/name
+header, win-loss-points summary, last-10 form strip, full roster split
+by skater/goalie, and match history. This is the one card that keeps
+its team logo, by explicit request -- every other graphic in the bot
+has logos removed.
+
+Also renders the stat leaders board (used by /leaders and the combined
+stat-leaders refresh), unchanged from before."""
 from __future__ import annotations
 
 import uuid
 from typing import Sequence
 
+from bot.graphics.logo_fetch import get_team_logo
 from bot.graphics.theme import GENERATED_DIR, Theme, load_font, prepare_canvas
 from bot.models import Team, TeamSeason
 from bot.services.leaders_service import LeaderRow
 
-WIDTH, HEIGHT = 780, 440
-CARD_LOGO_SIZE = 72
-ROW_LOGO_SIZE = 30
+WIDTH = 900
 BANNER_H = 110
+STAT_ROW_H = 90
+FORM_ROW_H = 90
+MEMBERS_HEADER_H = 40
+ROSTER_ROW_H = 26
+HISTORY_ROW_H = 26
+LOGO_SIZE = 72
+
+RESULT_COLORS = {"W": Theme.WIN_GREEN, "T": Theme.GOLD, "L": Theme.LOSS_RED, "O": (74, 144, 226)}
+RESULT_LABELS = {"W": "W", "T": "OTW", "L": "L", "O": "OTL"}
+
+
+from bot.graphics.theme import GENERATED_DIR, Theme, load_font, prepare_canvas
+from bot.models import Team, TeamSeason
+
+WIDTH = 900
+BANNER_H = 110
+STAT_ROW_H = 90
+FORM_ROW_H = 90
+MEMBERS_HEADER_H = 40
+ROSTER_ROW_H = 26
+HISTORY_ROW_H = 26
+LOGO_SIZE = 72
+
+RESULT_COLORS = {"W": Theme.WIN_GREEN, "T": Theme.GOLD, "L": Theme.LOSS_RED, "O": (74, 144, 226)}
+RESULT_LABELS = {"W": "W", "T": "OTW", "L": "L", "O": "OTL"}
 
 
 async def render_team_card(
     team: Team,
     team_season: TeamSeason,
     season_label: str,
-    leaders_lines: list[str],
+    leaders_lines: list[str] | None = None,  # kept for call-site compatibility, unused in this layout
     league_logo_url: str | None = None,
     background_url: str | None = None,
     recent_results: list | None = None,
+    skaters: list | None = None,
+    goalies: list | None = None,
 ) -> str:
     recent_results = recent_results or []
-    recap_h = (34 + len(recent_results) * 26 + 16) if recent_results else 0
-    height = HEIGHT + recap_h
+    skaters = skaters or []
+    goalies = goalies or []
+
+    members_h = MEMBERS_HEADER_H + 24
+    if skaters:
+        members_h += 24 + len(skaters) * ROSTER_ROW_H
+    if goalies:
+        members_h += 24 + len(goalies) * ROSTER_ROW_H
+    if not skaters and not goalies:
+        members_h += 24
+
+    history_h = 40 + max(len(recent_results), 1) * HISTORY_ROW_H
+
+    height = BANNER_H + STAT_ROW_H + FORM_ROW_H + members_h + history_h + 40
 
     accent = Theme.team_color(team)
     img, draw = await prepare_canvas(WIDTH, height, accent, background_url, banner_height=BANNER_H)
 
-    name_font = load_font("Black", 38)
-    sub_font = load_font("Regular", 20)
-    stat_label_font = load_font("Bold", 16)
-    stat_val_font = load_font("Black", 34)
-    leader_font = load_font("Regular", 18)
-    recap_font = load_font("Regular", 17)
+    name_font = load_font("Black", 36)
+    sub_font = load_font("Regular", 19)
+    section_font = load_font("Black", 18)
+    stat_label_font = load_font("Bold", 15)
+    stat_val_font = load_font("Black", 30)
+    form_font = load_font("Bold", 13)
+    row_header_font = load_font("Bold", 13)
+    row_font = load_font("Regular", 15)
+    record_font = load_font("Regular", 15)
 
-    draw.text((32, 24), team.name, font=name_font, fill=(255, 255, 255))
-    draw.text((34, 74), season_label, font=sub_font, fill=(210, 216, 230))
+    # --- Header: logo + name + league/season line ---
+    logo = await get_team_logo(team.logo_url, (LOGO_SIZE, LOGO_SIZE))
+    name_x = 32
+    if logo is not None:
+        img.paste(logo, (32, 18), logo.split()[-1])
+        name_x = 32 + LOGO_SIZE + 16
+    draw.text((name_x, 20), team.name, font=name_font, fill=(255, 255, 255))
+    draw.text((name_x + 2, 66), season_label, font=sub_font, fill=(210, 216, 230))
 
+    # --- Win/OTW/Loss/OTL/Points row ---
+    stat_top = BANNER_H + 16
+    ot_wins = getattr(team_season, "ot_wins", 0)
     stats = [
-        ("RECORD", f"{team_season.wins}-{team_season.losses}-{team_season.ot_losses}"),
-        ("PTS", str(team_season.points)),
-        ("GF", str(team_season.goals_for)),
-        ("GA", str(team_season.goals_against)),
-        ("DIFF", f"{'+' if team_season.goal_diff > 0 else ''}{team_season.goal_diff}"),
-        ("STRK", f"{team_season.streak_type or '-'}{team_season.streak_count or ''}"),
+        ("WINS", str(team_season.wins)),
+        ("OT WINS", str(ot_wins)),
+        ("LOSSES", str(team_season.losses)),
+        ("OTL", str(team_season.ot_losses)),
+        ("POINTS", str(team_season.points)),
     ]
-    cols = 3
-    cell_w = (WIDTH - 56 * 2) // cols
-    start_y = BANNER_H + 40
+    cell_w = (WIDTH - 64) // len(stats)
     for i, (label, value) in enumerate(stats):
-        cx = 56 + (i % cols) * cell_w
-        cy = start_y + (i // cols) * 90
-        draw.text((cx, cy), label, font=stat_label_font, fill=Theme.TEXT_MUTED)
-        draw.text((cx, cy + 22), value, font=stat_val_font, fill=Theme.TEXT_PRIMARY)
+        cx = 32 + i * cell_w
+        draw.text((cx, stat_top), label, font=stat_label_font, fill=Theme.TEXT_MUTED)
+        draw.text((cx, stat_top + 24), value, font=stat_val_font, fill=Theme.TEXT_PRIMARY)
 
-    line_y = start_y + 200
-    draw.line([(56, line_y), (WIDTH - 56, line_y)], fill=accent, width=2)
-    draw.text((56, line_y + 12), "TEAM LEADERS", font=stat_label_font, fill=Theme.TEXT_MUTED)
-    y = line_y + 38
-    for line in leaders_lines[:2]:
-        draw.text((56, y), line, font=leader_font, fill=Theme.TEXT_SECONDARY)
+    # --- Last 10 form strip + streak + record ---
+    form_top = BANNER_H + STAT_ROW_H
+    draw.line([(32, form_top), (WIDTH - 32, form_top)], fill=accent, width=2)
+    draw.text((32, form_top + 12), "LAST 10 GAMES", font=section_font, fill=Theme.TEXT_PRIMARY)
+
+    last_10 = (team_season.last_10 or "")[-10:]
+    box_x = 32
+    box_y = form_top + 42
+    box_size = 28
+    for code in last_10:
+        color = RESULT_COLORS.get(code, Theme.BORDER)
+        draw.rounded_rectangle([(box_x, box_y), (box_x + box_size, box_y + box_size)], radius=5, fill=color)
+        label = RESULT_LABELS.get(code, "?")
+        lw = draw.textlength(label, font=form_font)
+        draw.text((box_x + (box_size - lw) / 2, box_y + 7), label, font=form_font, fill=(10, 10, 10))
+        box_x += box_size + 6
+
+    streak_str = f"{team_season.streak_type or '-'}{team_season.streak_count or ''}"
+    record_str = f"{team_season.wins}-{ot_wins}-{team_season.losses}-{team_season.ot_losses} (W-OTW-L-OTL)"
+    draw.text((32, box_y + 40), f"Streak: {streak_str}   •   Record: {record_str}", font=record_font, fill=Theme.TEXT_SECONDARY)
+
+    # --- Members ---
+    members_top = form_top + FORM_ROW_H
+    draw.line([(32, members_top), (WIDTH - 32, members_top)], fill=accent, width=2)
+    draw.text((32, members_top + 12), "MEMBERS", font=section_font, fill=Theme.TEXT_PRIMARY)
+
+    y = members_top + 44
+    if not skaters and not goalies:
+        draw.text((32, y), "No games played yet this season.", font=row_font, fill=Theme.TEXT_MUTED)
         y += 24
 
-    if recent_results:
-        recap_top = HEIGHT - 4
-        draw.line([(56, recap_top), (WIDTH - 56, recap_top)], fill=Theme.BORDER, width=1)
-        draw.text((56, recap_top + 10), "RECENT RESULTS", font=stat_label_font, fill=Theme.TEXT_MUTED)
-        ry = recap_top + 34
+    sk_cols = {"name": 32, "gp": 340, "g": 420, "a": 490, "p": 560, "ppg": 630}
+    if skaters:
+        draw.text((sk_cols["name"], y), "SKATERS", font=row_header_font, fill=Theme.TEXT_MUTED)
+        draw.text((sk_cols["gp"], y), "GP", font=row_header_font, fill=Theme.TEXT_MUTED)
+        draw.text((sk_cols["g"], y), "G", font=row_header_font, fill=Theme.TEXT_MUTED)
+        draw.text((sk_cols["a"], y), "A", font=row_header_font, fill=Theme.TEXT_MUTED)
+        draw.text((sk_cols["p"], y), "P", font=row_header_font, fill=Theme.TEXT_MUTED)
+        draw.text((sk_cols["ppg"], y), "PPG", font=row_header_font, fill=Theme.TEXT_MUTED)
+        y += 22
+        for i, s in enumerate(skaters):
+            if i % 2 == 1:
+                draw.rectangle([(24, y - 3), (WIDTH - 24, y + ROSTER_ROW_H - 6)], fill=Theme.BG_PANEL)
+            draw.text((sk_cols["name"], y), s.gamertag, font=row_font, fill=Theme.TEXT_PRIMARY)
+            draw.text((sk_cols["gp"], y), str(s.games_played), font=row_font, fill=Theme.TEXT_SECONDARY)
+            draw.text((sk_cols["g"], y), str(s.goals), font=row_font, fill=Theme.TEXT_SECONDARY)
+            draw.text((sk_cols["a"], y), str(s.assists), font=row_font, fill=Theme.TEXT_SECONDARY)
+            draw.text((sk_cols["p"], y), str(s.points), font=row_font, fill=Theme.TEXT_PRIMARY)
+            draw.text((sk_cols["ppg"], y), str(s.ppg), font=row_font, fill=Theme.TEXT_SECONDARY)
+            y += ROSTER_ROW_H
+
+    gl_cols = {"name": 32, "gp": 340, "ga": 420, "gaa": 480, "saves": 550, "svpct": 630, "so": 710}
+    if goalies:
+        y += 8
+        draw.text((gl_cols["name"], y), "GOALIES", font=row_header_font, fill=Theme.TEXT_MUTED)
+        draw.text((gl_cols["gp"], y), "GP", font=row_header_font, fill=Theme.TEXT_MUTED)
+        draw.text((gl_cols["ga"], y), "GA", font=row_header_font, fill=Theme.TEXT_MUTED)
+        draw.text((gl_cols["gaa"], y), "GAA", font=row_header_font, fill=Theme.TEXT_MUTED)
+        draw.text((gl_cols["saves"], y), "SAVES", font=row_header_font, fill=Theme.TEXT_MUTED)
+        draw.text((gl_cols["svpct"], y), "SV%", font=row_header_font, fill=Theme.TEXT_MUTED)
+        draw.text((gl_cols["so"], y), "SO", font=row_header_font, fill=Theme.TEXT_MUTED)
+        y += 22
+        for i, g in enumerate(goalies):
+            if i % 2 == 1:
+                draw.rectangle([(24, y - 3), (WIDTH - 24, y + ROSTER_ROW_H - 6)], fill=Theme.BG_PANEL)
+            draw.text((gl_cols["name"], y), g.gamertag, font=row_font, fill=Theme.TEXT_PRIMARY)
+            draw.text((gl_cols["gp"], y), str(g.games_played), font=row_font, fill=Theme.TEXT_SECONDARY)
+            draw.text((gl_cols["ga"], y), str(g.goals_against), font=row_font, fill=Theme.TEXT_SECONDARY)
+            draw.text((gl_cols["gaa"], y), f"{g.gaa:.2f}", font=row_font, fill=Theme.TEXT_SECONDARY)
+            draw.text((gl_cols["saves"], y), str(g.saves), font=row_font, fill=Theme.TEXT_SECONDARY)
+            draw.text((gl_cols["svpct"], y), f"{g.save_pct:.3f}".lstrip("0"), font=row_font, fill=Theme.TEXT_SECONDARY)
+            draw.text((gl_cols["so"], y), str(g.shutouts), font=row_font, fill=Theme.TEXT_SECONDARY)
+            y += ROSTER_ROW_H
+
+    # --- Match History ---
+    history_top = y + 16
+    draw.line([(32, history_top), (WIDTH - 32, history_top)], fill=accent, width=2)
+    draw.text((32, history_top + 12), "MATCH HISTORY", font=section_font, fill=Theme.TEXT_PRIMARY)
+
+    hy = history_top + 44
+    if not recent_results:
+        draw.text((32, hy), "No games played yet this season.", font=row_font, fill=Theme.TEXT_MUTED)
+    else:
         for r in recent_results:
             win_color = Theme.WIN_GREEN if r.is_win else Theme.LOSS_RED
             suffix = " (OT)" if r.is_ot else (" (forfeit)" if r.is_forfeit else "")
@@ -79,8 +200,8 @@ async def render_team_card(
                 line = f"{team.name} {r.goals_for} - {r.goals_against} {r.opponent.name}{suffix}"
             else:
                 line = f"{r.opponent.name} {r.goals_against} - {r.goals_for} {team.name}{suffix}"
-            draw.text((56, ry), line, font=recap_font, fill=win_color)
-            ry += 26
+            draw.text((32, hy), line, font=row_font, fill=win_color)
+            hy += HISTORY_ROW_H
 
     out_path = GENERATED_DIR / f"team_{team.id}_{uuid.uuid4().hex[:8]}.png"
     img.save(out_path)
