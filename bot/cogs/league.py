@@ -1,4 +1,4 @@
-            """
+"""
 Consolidated `/league` command tree: `/league season`, `/league club`,
 `/league player`, `/league list`, `/league admin`, `/league refresh`,
 `/league schedule`, plus top-level `/league postpone-game`,
@@ -610,9 +610,19 @@ class LeagueCog(commands.Cog):
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @admin_group.command(name="submit-game", description="Import stats for a scheduled game from EA's Pro Clubs API")
-    @app_commands.describe(schedule_game_number="The game number from /league schedule", season="Season number (defaults to active)")
+    @app_commands.describe(
+        schedule_game_number="The game number from /league schedule",
+        season="Season number (defaults to active)",
+        disable_auto_merge="Force-disable lagout auto-merge for this import (rare edge case override)",
+    )
     @gm_only()
-    async def admin_submit_game(self, interaction: discord.Interaction, schedule_game_number: int, season: int | None = None):
+    async def admin_submit_game(
+        self,
+        interaction: discord.Interaction,
+        schedule_game_number: int,
+        season: int | None = None,
+        disable_auto_merge: bool = False,
+    ):
         await interaction.response.defer()
         async with get_session() as session:
             try:
@@ -621,7 +631,13 @@ class LeagueCog(commands.Cog):
                 await interaction.followup.send(embed=error_embed("Season error", str(e)))
                 return
             try:
-                result = await import_game(session, season_id=s.id, game_number=schedule_game_number, imported_by_discord_id=interaction.user.id)
+                result = await import_game(
+                    session,
+                    season_id=s.id,
+                    game_number=schedule_game_number,
+                    imported_by_discord_id=interaction.user.id,
+                    disable_auto_merge=disable_auto_merge,
+                )
             except ImportError_ as e:
                 await interaction.followup.send(embed=error_embed("Couldn't import game", str(e)))
                 return
@@ -648,6 +664,12 @@ class LeagueCog(commands.Cog):
             await refresh_all_channels(interaction.client, session)
 
         embed = success_embed("Game imported", f"**{result.home_team.name} {result.game.home_score} - {result.game.away_score} {result.away_team.name}**")
+        if result.was_merged:
+            embed.add_field(
+                name="🔄 Lagout Auto-Merged",
+                value="Two close-together matches between these clubs were automatically combined into one game's stats.",
+                inline=False,
+            )
         if recap_text:
             embed.add_field(name="Recap", value=recap_text, inline=False)
         if series_status_text:
