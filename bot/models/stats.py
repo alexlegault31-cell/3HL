@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from sqlalchemy import Boolean, Float, ForeignKey, Integer
+from sqlalchemy import Boolean, Float, ForeignKey, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from bot.models.base import Base, IDMixin, TimestampMixin
@@ -37,6 +37,7 @@ class PlayerGameStat(Base, IDMixin, TimestampMixin):
     giveaways: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     pass_attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     passes_completed: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    position: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
 
     game: Mapped["Game"] = relationship()
     player: Mapped["Player"] = relationship()
