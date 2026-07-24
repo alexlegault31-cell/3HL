@@ -7,6 +7,7 @@ import uuid
 
 from PIL import ImageDraw
 
+from bot.graphics.logo_fetch import get_team_logo
 from bot.graphics.theme import GENERATED_DIR, Theme, load_font, prepare_canvas
 from bot.models import PlayoffSeries, Team
 
@@ -44,6 +45,10 @@ async def render_playoff_bracket(
 
     draw.text((PADDING, 20), "PLAYOFF BRACKET", font=title_font, fill=(255, 255, 255))
     draw.text((PADDING, 58), season_label, font=sub_font, fill=(210, 216, 230))
+
+    league_logo = await get_team_logo(league_logo_url, (56, 56))
+    if league_logo is not None:
+        img.paste(league_logo, (width - PADDING - 56, 16), league_logo.split()[-1])
 
     top_y = PADDING + BANNER_H
     centers: list[list[float]] = []
@@ -107,6 +112,11 @@ def _truncate_to_fit(draw: ImageDraw.ImageDraw, text: str, font, max_width: floa
 
 async def _draw_team_row(draw, img, x, y, box_w, team, seed, wins, won, team_font, score_font) -> None:
     name_x = x + 10
+    if team is not None:
+        logo = await get_team_logo(team.logo_url, (LOGO_SIZE, LOGO_SIZE))
+        if logo is not None:
+            img.paste(logo, (int(name_x), int(y - 4)), logo.split()[-1])
+            name_x += LOGO_SIZE + 6
 
     seed_str = f"({seed}) " if seed else ""
     raw_name = f"{seed_str}{team.name}" if team else "TBD"
