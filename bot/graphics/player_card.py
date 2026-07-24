@@ -1,31 +1,61 @@
 """Renders a player profile card for /league player stats -- a season
-summary up top, followed by a full per-game log (opponent, position, and
-that game's stat line), instead of just season totals."""
+summary (labeled SKATER STATS / GOALIE STATS) followed by a full
+per-game log. No team/league logos are drawn on this card by request."""
 from __future__ import annotations
 
 import uuid
 
-from bot.graphics.logo_fetch import get_team_logo
 from bot.graphics.theme import GENERATED_DIR, Theme, load_font, prepare_canvas
 from bot.models import Player, PlayerSeason, Team
-from bot.services.game_log_service import GoalieGameLogRow, SkaterGameLogRow
 
-WIDTH = 1040
-LOGO_SIZE = 60
-BANNER_H = 110
-SUMMARY_H = 130
-LOG_HEADER_H = 60
-ROW_H = 32
-OPP_LOGO_SIZE = 22
+WIDTH = 1080
+BANNER_H = 100
+SUMMARY_H = 110
+LOG_HEADER_H = 56
+ROW_H = 30
 MAX_ROWS_SHOWN = 15
 
-# Column x-positions for the skater game log table
-SK_COLS = {
-    "opp": 40, "pos": 330, "g": 400, "a": 460, "p": 520,
-    "pm": 580, "sog": 650, "hits": 730, "pim": 810, "ta": 890,
+# Column x-positions for the skater game log table -- order matches the
+# exact spec: Position, G, A, P, +/-, TOI, TwP, Shots, Pass%, FOW, FOL,
+# H, TA, GA (giveaways), BS, INT, PIM
+SK_COLS_ORDER = ["pos", "g", "a", "p", "pm", "toi", "twp", "shots", "pass", "fow", "fol", "h", "ta", "ga", "bs", "int", "pim"]
+SK_HEADERS = {
+    "pos": "POS", "g": "G", "a": "A", "p": "P", "pm": "+/-", "toi": "TOI", "twp": "TwP",
+    "shots": "SOG", "pass": "PS%", "fow": "FOW", "fol": "FOL", "h": "H", "ta": "TA",
+    "ga": "GA", "bs": "BS", "int": "INT", "pim": "PIM",
 }
-# Column x-positions for the goalie game log table
-GL_COLS = {"opp": 40, "result": 330, "sa": 420, "sv": 500, "ga": 580, "svpct": 660, "toi": 780}
+
+# Goalie per-game log columns
+GL_COLS_ORDER = ["result", "sa", "sv", "ga", "svpct", "toi", "pkchk", "despsv"]
+GL_HEADERS = {
+    "result": "RESULT", "sa": "SA", "sv": "SV", "ga": "GA", "svpct": "SV%",
+    "toi": "TOI", "pkchk": "PKCHK", "despsv": "DESPSV",
+}
+
+OPP_COL_W = 190
+
+
+def _col_positions(order: list[str]) -> dict[str, int]:
+    """Evenly distributes the remaining width after the opponent column
+    across every stat column in the given order."""
+    available = WIDTH - 64 - OPP_COL_W
+    col_w = available // len(order)
+    positions = {}
+    x = 32 + OPP_COL_W
+    for key in order:
+        positions[key] = x
+        x += col_w
+    return positions
+
+
+SK_COLS = _col_positions(SK_COLS_ORDER)
+GL_COLS = _col_positions(GL_COLS_ORDER)
+
+
+def _fmt_toi(minutes: float) -> str:
+    mins = int(minutes)
+    secs = int(round((minutes - mins) * 60))
+    return f"{mins}:{secs:02d}"
 
 
 async def render_player_card(
@@ -33,7 +63,7 @@ async def render_player_card(
     season: PlayerSeason,
     team: Team | None,
     season_label: str,
-    league_logo_url: str | None = None,
+    league_logo_url: str | None = None,  # accepted for call-site compatibility, intentionally unused -- no logos on this card
     background_url: str | None = None,
     game_log: list | None = None,
 ) -> str:
@@ -44,100 +74,84 @@ async def render_player_card(
     accent = Theme.team_color(team) if team else Theme.ACCENT
     img, draw = await prepare_canvas(WIDTH, height, accent, background_url, banner_height=BANNER_H)
 
-    name_font = load_font("Black", 38)
-    sub_font = load_font("Regular", 20)
-    stat_label_font = load_font("Bold", 16)
-    stat_val_font = load_font("Black", 32)
-    role_font = load_font("Bold", 14)
-    log_header_font = load_font("Bold", 15)
-    log_row_font = load_font("Regular", 16)
-    log_title_font = load_font("Black", 20)
+    name_font = load_font("Black", 34)
+    sub_font = load_font("Regular", 18)
+    section_label_font = load_font("Black", 18)
+    stat_label_font = load_font("Bold", 14)
+    stat_val_font = load_font("Black", 28)
+    role_font = load_font("Bold", 13)
+    log_header_font = load_font("Bold", 13)
+    log_row_font = load_font("Regular", 14)
+    log_title_font = load_font("Black", 18)
 
-    # --- Header banner ---
-    draw.text((32, 24), player.gamertag, font=name_font, fill=(255, 255, 255))
+    # --- Header banner (no logos) ---
+    draw.text((32, 20), player.gamertag, font=name_font, fill=(255, 255, 255))
     role = "Goalie" if player.is_goalie else "Skater"
     team_line = f"{team.name} • {season_label} • {role}" if team else f"{season_label} • {role}"
-    draw.text((34, 76), team_line, font=sub_font, fill=(210, 216, 230))
+    draw.text((34, 64), team_line, font=sub_font, fill=(210, 216, 230))
 
-    logo = await get_team_logo(team.logo_url if team else None, (LOGO_SIZE, LOGO_SIZE))
-    if logo is not None:
-        img.paste(logo, (WIDTH - 32 - LOGO_SIZE, 20), logo.split()[-1])
-    else:
-        draw.ellipse([(WIDTH - 32 - LOGO_SIZE, 20), (WIDTH - 32, 20 + LOGO_SIZE)], fill=accent)
-        role_letter = "G" if player.is_goalie else "S"
-        rw = draw.textlength(role_letter, font=role_font)
-        draw.text((WIDTH - 32 - LOGO_SIZE + (LOGO_SIZE - rw) / 2, 20 + LOGO_SIZE / 2 - 8), role_letter, font=role_font, fill=(10, 10, 10))
+    # --- Season summary ---
+    summary_top = BANNER_H + 14
+    section_label = "GOALIE STATS" if player.is_goalie else "SKATER STATS"
+    draw.text((32, summary_top), section_label, font=section_label_font, fill=Theme.TEXT_PRIMARY)
 
-    league_logo = await get_team_logo(league_logo_url, (40, 40))
-    if league_logo is not None:
-        img.paste(league_logo, (WIDTH - 32 - LOGO_SIZE - 50, 35), league_logo.split()[-1])
-
-    # --- Season summary row ---
-    summary_top = BANNER_H + 20
     if player.is_goalie:
         stats = [
-            ("GP", str(season.games_played)),
-            ("W-L-OTL", f"{season.wins}-{season.losses}-{season.ot_losses}"),
-            ("GAA", f"{season.gaa:.2f}"),
-            ("SV%", f"{season.save_pct:.3f}".lstrip("0")),
-            ("SO", str(season.shutouts)),
+            ("SHOTS", str(season.shots_against)),
+            ("GA", str(season.goals_against)),
             ("SAVES", str(season.saves)),
+            ("SAVE%", f"{season.save_pct:.3f}".lstrip("0")),
+            ("GAA", f"{season.gaa:.2f}"),
+            ("PKCHK", str(getattr(season, "poke_checks", 0))),
+            ("DESPSAVE", str(getattr(season, "desperation_saves", 0))),
         ]
     else:
         stats = [
-            ("GP", str(season.games_played)),
-            ("G", str(season.goals)),
-            ("A", str(season.assists)),
-            ("PTS", str(season.points)),
+            ("GOALS", str(season.goals)),
+            ("ASSISTS", str(season.assists)),
+            ("POINTS", str(season.points)),
+            ("PPG", str(season.ppg)),
             ("+/-", f"{'+' if season.plus_minus > 0 else ''}{season.plus_minus}"),
             ("PIM", str(season.pim)),
+            ("HITS", str(season.hits)),
         ]
-    cols = 6
+    cols = len(stats)
     cell_w = (WIDTH - 64) // cols
+    row_y = summary_top + 30
     for i, (label, value) in enumerate(stats):
         cx = 32 + i * cell_w
-        draw.text((cx, summary_top), label, font=stat_label_font, fill=Theme.TEXT_MUTED)
-        draw.text((cx, summary_top + 22), value, font=stat_val_font, fill=Theme.TEXT_PRIMARY)
+        draw.text((cx, row_y), label, font=stat_label_font, fill=Theme.TEXT_MUTED)
+        draw.text((cx, row_y + 20), value, font=stat_val_font, fill=Theme.TEXT_PRIMARY)
 
     # --- Game log ---
     log_top = BANNER_H + SUMMARY_H
     draw.line([(32, log_top), (WIDTH - 32, log_top)], fill=accent, width=2)
-    draw.text((32, log_top + 10), "GAME LOG", font=log_title_font, fill=Theme.TEXT_PRIMARY)
+    draw.text((32, log_top + 8), f"GAME LOG - {season_label}", font=log_title_font, fill=Theme.TEXT_PRIMARY)
 
     if not rows_to_show:
-        draw.text((32, log_top + 44), "No games played yet this season.", font=log_row_font, fill=Theme.TEXT_MUTED)
+        draw.text((32, log_top + 40), "No games played yet this season.", font=log_row_font, fill=Theme.TEXT_MUTED)
         out_path = GENERATED_DIR / f"player_{player.id}_{uuid.uuid4().hex[:8]}.png"
         img.save(out_path)
         return str(out_path)
 
-    header_y = log_top + 42
+    header_y = log_top + 38
+    cols_order = GL_COLS_ORDER if player.is_goalie else SK_COLS_ORDER
     cols_map = GL_COLS if player.is_goalie else SK_COLS
-    headers = (
-        {"opp": "OPPONENT", "result": "RESULT", "sa": "SA", "sv": "SV", "ga": "GA", "svpct": "SV%", "toi": "TOI"}
-        if player.is_goalie
-        else {"opp": "OPPONENT", "pos": "POS", "g": "G", "a": "A", "p": "P", "pm": "+/-", "sog": "SOG", "hits": "H", "pim": "PIM", "ta": "TA"}
-    )
-    for key, label in headers.items():
-        draw.text((cols_map[key], header_y), label, font=log_header_font, fill=Theme.TEXT_MUTED)
-    draw.line([(32, header_y + 24), (WIDTH - 32, header_y + 24)], fill=Theme.BORDER, width=1)
+    headers = GL_HEADERS if player.is_goalie else SK_HEADERS
 
-    y = header_y + 32
-    logo_cache: dict[str, object] = {}  # avoid re-fetching the same opponent's logo for every row they appear in
+    draw.text((32, header_y), "OPPONENT", font=log_header_font, fill=Theme.TEXT_MUTED)
+    for key in cols_order:
+        draw.text((cols_map[key], header_y), headers[key], font=log_header_font, fill=Theme.TEXT_MUTED)
+    draw.line([(32, header_y + 20), (WIDTH - 32, header_y + 20)], fill=Theme.BORDER, width=1)
+
+    y = header_y + 26
     for i, row in enumerate(rows_to_show):
         if i % 2 == 1:
-            draw.rectangle([(24, y - 4), (WIDTH - 24, y + ROW_H - 8)], fill=Theme.BG_PANEL)
+            draw.rectangle([(24, y - 3), (WIDTH - 24, y + ROW_H - 6)], fill=Theme.BG_PANEL)
 
-        opp_url = row.opponent.logo_url if row.opponent else None
-        if opp_url not in logo_cache:
-            logo_cache[opp_url] = await get_team_logo(opp_url, (OPP_LOGO_SIZE, OPP_LOGO_SIZE))
-        opp_logo = logo_cache[opp_url]
-        name_x = cols_map["opp"]
-        if opp_logo is not None:
-            img.paste(opp_logo, (name_x, y - 2), opp_logo.split()[-1])
-            name_x += OPP_LOGO_SIZE + 8
         vs = "vs" if row.is_home else "@"
         opp_name = row.opponent.name if row.opponent else "Unknown"
-        draw.text((name_x, y), f"{vs} {opp_name}", font=log_row_font, fill=Theme.TEXT_PRIMARY)
+        draw.text((32, y), f"{vs} {opp_name}", font=log_row_font, fill=Theme.TEXT_PRIMARY)
 
         if player.is_goalie:
             result_color = Theme.WIN_GREEN if row.result == "W" else (Theme.GOLD if row.result == "OTL" else Theme.LOSS_RED)
@@ -145,11 +159,10 @@ async def render_player_card(
             draw.text((cols_map["sa"], y), str(row.shots_against), font=log_row_font, fill=Theme.TEXT_SECONDARY)
             draw.text((cols_map["sv"], y), str(row.saves), font=log_row_font, fill=Theme.TEXT_SECONDARY)
             draw.text((cols_map["ga"], y), str(row.goals_against), font=log_row_font, fill=Theme.TEXT_SECONDARY)
-            sv_pct = (row.saves / row.shots_against) if row.shots_against else 0.0
-            draw.text((cols_map["svpct"], y), f"{sv_pct:.3f}".lstrip("0"), font=log_row_font, fill=Theme.TEXT_SECONDARY)
-            mins = int(row.minutes_played)
-            secs = int(round((row.minutes_played - mins) * 60))
-            draw.text((cols_map["toi"], y), f"{mins}:{secs:02d}", font=log_row_font, fill=Theme.TEXT_SECONDARY)
+            draw.text((cols_map["svpct"], y), f"{row.save_pct:.3f}".lstrip("0"), font=log_row_font, fill=Theme.TEXT_SECONDARY)
+            draw.text((cols_map["toi"], y), _fmt_toi(row.minutes_played), font=log_row_font, fill=Theme.TEXT_SECONDARY)
+            draw.text((cols_map["pkchk"], y), str(row.poke_checks), font=log_row_font, fill=Theme.TEXT_SECONDARY)
+            draw.text((cols_map["despsv"], y), str(row.desperation_saves), font=log_row_font, fill=Theme.TEXT_SECONDARY)
         else:
             draw.text((cols_map["pos"], y), (row.position or "-").upper()[:3], font=log_row_font, fill=Theme.TEXT_SECONDARY)
             draw.text((cols_map["g"], y), str(row.goals), font=log_row_font, fill=Theme.TEXT_SECONDARY)
@@ -158,10 +171,18 @@ async def render_player_card(
             pm_str = f"{'+' if row.plus_minus > 0 else ''}{row.plus_minus}"
             pm_color = Theme.WIN_GREEN if row.plus_minus > 0 else (Theme.LOSS_RED if row.plus_minus < 0 else Theme.TEXT_SECONDARY)
             draw.text((cols_map["pm"], y), pm_str, font=log_row_font, fill=pm_color)
-            draw.text((cols_map["sog"], y), str(row.shots), font=log_row_font, fill=Theme.TEXT_SECONDARY)
-            draw.text((cols_map["hits"], y), str(row.hits), font=log_row_font, fill=Theme.TEXT_SECONDARY)
-            draw.text((cols_map["pim"], y), str(row.pim), font=log_row_font, fill=Theme.TEXT_SECONDARY)
+            draw.text((cols_map["toi"], y), _fmt_toi(row.minutes_played), font=log_row_font, fill=Theme.TEXT_SECONDARY)
+            draw.text((cols_map["twp"], y), _fmt_toi(row.time_with_puck), font=log_row_font, fill=Theme.TEXT_SECONDARY)
+            draw.text((cols_map["shots"], y), str(row.shots), font=log_row_font, fill=Theme.TEXT_SECONDARY)
+            draw.text((cols_map["pass"], y), f"{row.pass_pct:.0%}", font=log_row_font, fill=Theme.TEXT_SECONDARY)
+            draw.text((cols_map["fow"], y), str(row.faceoffs_won), font=log_row_font, fill=Theme.TEXT_SECONDARY)
+            draw.text((cols_map["fol"], y), str(row.faceoffs_lost), font=log_row_font, fill=Theme.TEXT_SECONDARY)
+            draw.text((cols_map["h"], y), str(row.hits), font=log_row_font, fill=Theme.TEXT_SECONDARY)
             draw.text((cols_map["ta"], y), str(row.takeaways), font=log_row_font, fill=Theme.TEXT_SECONDARY)
+            draw.text((cols_map["ga"], y), str(row.giveaways), font=log_row_font, fill=Theme.TEXT_SECONDARY)
+            draw.text((cols_map["bs"], y), str(row.blocked_shots), font=log_row_font, fill=Theme.TEXT_SECONDARY)
+            draw.text((cols_map["int"], y), str(row.interceptions), font=log_row_font, fill=Theme.TEXT_SECONDARY)
+            draw.text((cols_map["pim"], y), str(row.pim), font=log_row_font, fill=Theme.TEXT_SECONDARY)
 
         y += ROW_H
 
