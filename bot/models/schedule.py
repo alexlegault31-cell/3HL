@@ -1,4 +1,3 @@
-
 """
 The schedule is the *source of truth* for the league. A ScheduleGame is
 created by the commissioner ahead of time (bulk import or manual) with a
@@ -43,6 +42,13 @@ class ScheduleGame(Base, IDMixin, TimestampMixin):
 
     scheduled_at: Mapped[Optional[dt.datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
+    # Recurring weekly slot label (e.g. "Tuesday" / "8:00 PM EST") -- not
+    # tied to a specific calendar date, just which of the league's fixed
+    # weekly time slots this game is assigned to. Auto-assigned by the
+    # schedule generator, cycling through every day's slots in order.
+    day_of_week: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    game_time: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+
     status: Mapped[ScheduleStatus] = mapped_column(
        Enum(ScheduleStatus, name="schedule_status", values_callable=lambda obj: [e.value for e in obj]),
        default=ScheduleStatus.SCHEDULED,
@@ -59,4 +65,3 @@ class ScheduleGame(Base, IDMixin, TimestampMixin):
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<ScheduleGame #{self.game_number} season={self.season_id} status={self.status}>"
-
