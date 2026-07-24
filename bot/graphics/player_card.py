@@ -122,11 +122,15 @@ async def render_player_card(
     draw.line([(32, header_y + 24), (WIDTH - 32, header_y + 24)], fill=Theme.BORDER, width=1)
 
     y = header_y + 32
+    logo_cache: dict[str, object] = {}  # avoid re-fetching the same opponent's logo for every row they appear in
     for i, row in enumerate(rows_to_show):
         if i % 2 == 1:
             draw.rectangle([(24, y - 4), (WIDTH - 24, y + ROW_H - 8)], fill=Theme.BG_PANEL)
 
-        opp_logo = await get_team_logo(row.opponent.logo_url if row.opponent else None, (OPP_LOGO_SIZE, OPP_LOGO_SIZE))
+        opp_url = row.opponent.logo_url if row.opponent else None
+        if opp_url not in logo_cache:
+            logo_cache[opp_url] = await get_team_logo(opp_url, (OPP_LOGO_SIZE, OPP_LOGO_SIZE))
+        opp_logo = logo_cache[opp_url]
         name_x = cols_map["opp"]
         if opp_logo is not None:
             img.paste(opp_logo, (name_x, y - 2), opp_logo.split()[-1])
