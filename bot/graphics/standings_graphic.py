@@ -6,7 +6,6 @@ from typing import Sequence
 
 from PIL import ImageDraw
 
-from bot.graphics.logo_fetch import get_team_logo
 from bot.graphics.theme import GENERATED_DIR, Theme, load_font, prepare_canvas
 from bot.models import StandingsEntry, Team
 
@@ -49,10 +48,6 @@ async def render_standings(
     draw.text((40, 28), "LEAGUE STANDINGS", font=title_font, fill=(255, 255, 255))
     draw.text((40, 82), season_label, font=sub_font, fill=(200, 210, 230))
 
-    league_logo = await get_team_logo(league_logo_url, (80, 80))
-    if league_logo is not None:
-        img.paste(league_logo, (WIDTH - 40 - 80, 25), league_logo.split()[-1])
-
     header_y = HEADER_H + 14
     for key, label in [
         ("team", "TEAM"),
@@ -81,12 +76,8 @@ async def render_standings(
         rank_color = Theme.GOLD if entry.rank == 1 else (Theme.SILVER if entry.rank == 2 else (Theme.BRONZE if entry.rank == 3 else Theme.TEXT_PRIMARY))
         draw.text((COL_X["rank"], y), str(entry.rank), font=rank_font, fill=rank_color)
 
-        logo = await get_team_logo(team.logo_url, (LOGO_SIZE, LOGO_SIZE))
         logo_x = COL_X["team"] - 44
-        if logo is not None:
-            img.paste(logo, (logo_x, y - 4), logo.split()[-1])
-        else:
-            draw.ellipse([(logo_x, y), (logo_x + LOGO_SIZE, y + LOGO_SIZE)], fill=team_color)
+        draw.ellipse([(logo_x, y), (logo_x + LOGO_SIZE, y + LOGO_SIZE)], fill=team_color)
         draw.text((COL_X["team"], y + 4), team.name, font=row_font, fill=Theme.TEXT_PRIMARY)
 
         gp = entry.wins + entry.losses + entry.ot_losses
