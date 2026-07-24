@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import uuid
 
-from PIL import ImageDraw
+from PIL import Image, ImageDraw
 
 from bot.graphics.logo_fetch import get_team_logo
 from bot.graphics.theme import GENERATED_DIR, Theme, load_font, prepare_canvas
@@ -33,12 +33,24 @@ async def render_playoff_bracket(
 
     first_round_series_count = len(rounds[0])
     height = PADDING * 2 + BANNER_H + first_round_series_count * (SERIES_HEIGHT + SERIES_GAP)
-    width = PADDING * 2 + len(rounds) * ROUND_WIDTH
-
-    img, draw = await prepare_canvas(width, height, accent_color, background_url, banner_height=BANNER_H + PADDING)
 
     title_font = load_font("Black", 34)
     sub_font = load_font("Bold", 20)
+
+    # The canvas needs to be at least as wide as the title text itself --
+    # with few rounds (e.g. a bracket starting at Semifinals), the
+    # round-count-based width alone can be narrower than "PLAYOFF BRACKET"
+    # at this font size, clipping it. Measure with a throwaway draw
+    # context before deciding the final canvas size.
+    _measure_img = Image.new("RGB", (10, 10))
+    _measure_draw = ImageDraw.Draw(_measure_img)
+    title_w = _measure_draw.textlength("PLAYOFF BRACKET", font=title_font)
+    content_width = PADDING * 2 + len(rounds) * ROUND_WIDTH
+    title_width_needed = PADDING * 2 + int(title_w) + 80  # room for the league logo alongside it
+    width = max(content_width, title_width_needed)
+
+    img, draw = await prepare_canvas(width, height, accent_color, background_url, banner_height=BANNER_H + PADDING)
+
     round_font = load_font("Bold", 16)
     team_font = load_font("Regular", 16)
     score_font = load_font("Black", 20)
