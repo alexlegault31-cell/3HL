@@ -831,6 +831,31 @@ class LeagueCog(commands.Cog):
                 ).scalars().all()
                 next_number = (max(existing_numbers) + 1) if existing_numbers else 1
 
+            # Check the whole range we're about to use for collisions BEFORE
+            # inserting anything -- this is what turns a raw database crash
+            # (which happened if old schedule rows were still present, e.g.
+            # after removing some teams but not clearing their games) into a
+            # clear, actionable error message instead.
+            proposed_numbers = set(range(next_number, next_number + len(matchups)))
+            colliding = (
+                await session.execute(
+                    select(ScheduleGame.game_number).where(
+                        ScheduleGame.season_id == s.id, ScheduleGame.game_number.in_(proposed_numbers)
+                    )
+                )
+            ).scalars().all()
+            if colliding:
+                await interaction.response.send_message(
+                    embed=error_embed(
+                        "Game numbers already taken",
+                        f"{s.name} already has games numbered {min(colliding)}-{max(colliding)} (or overlapping). "
+                        f"Use `/league admin clear-schedule` to remove the old schedule first, or pick a different "
+                        f"`starting_game_number` that doesn't overlap with existing games.",
+                    ),
+                    ephemeral=True,
+                )
+                return
+
             created_count = 0
             for m in matchups:
                 session.add(
@@ -851,6 +876,43 @@ class LeagueCog(commands.Cog):
                 f"Created **{created_count}** games across **{matchups[-1].round_number}** weeks for **{len(team_objs)}** clubs "
                 f"(each team plays every other team **{times_through}x**).\n\nGame numbers **{next_number - created_count}**–**{next_number - 1}**. "
                 f"Use `/league schedule view` to see the full schedule.",
+            )
+        )
+
+    @admin_group.command(name="clear-schedule", description="Delete a season's schedule so it can be regenerated cleanly")
+    @app_commands.describe(
+        include_played="Also delete games that already have results imported (DESTRUCTIVE -- defaults to False, only clears unplayed games)"
+    )
+    @commissioner_only()
+    async def admin_clear_schedule(self, interaction: discord.Interaction, include_played: bool = False, season: int | None = None):
+        async with get_session() as session:
+            try:
+                s = await resolve_season(session, season)
+            except SeasonNotFound as e:
+                await interaction.response.send_message(embed=error_embed("Season error", str(e)), ephemeral=True)
+                return
+
+            stmt = select(ScheduleGame).where(ScheduleGame.season_id == s.id)
+            if not include_played:
+                stmt = stmt.where(ScheduleGame.status == ScheduleStatus.SCHEDULED)
+            games = (await session.execute(stmt)).scalars().all()
+
+            if not games:
+                await interaction.response.send_message(
+                    embed=info_embed("Nothing to clear", f"No {'games' if include_played else 'unplayed games'} found for {s.name}.")
+                )
+                return
+
+            played_count = sum(1 for g in games if g.status != ScheduleStatus.SCHEDULED)
+            deleted_count = len(games)
+            for g in games:
+                await session.delete(g)
+
+        await interaction.response.send_message(
+            embed=success_embed(
+                "Schedule cleared",
+                f"Deleted **{deleted_count}** {'games' if include_played else 'unplayed games'} from {s.name}'s schedule."
+                + (f" This included **{played_count}** already-played games." if include_played and played_count else ""),
             )
         )
 
