@@ -113,6 +113,7 @@ class TeamBoxScore:
     pim: int
     powerplay_goals: int = 0
     powerplay_opportunities: int = 0
+    time_on_attack: float = 0.0  # "TOA" -- best-guess field, see team_box() below
 
 
 @dataclass
@@ -359,6 +360,13 @@ class ChelStatsClient:
                 pim=team_pim.get(cid, 0),
                 powerplay_goals=int(c.get("ppg", 0) or 0),
                 powerplay_opportunities=int(c.get("ppo", 0) or 0),
+                # NOT CONFIRMED -- "toa" is a best guess at EA's field key
+                # for team-level Time on Attack (seconds), not verified
+                # against a real payload the way the fields above are. If
+                # this always shows 0:00 on the recap graphic, the key
+                # name is wrong and needs checking against a real
+                # GameImport.raw_payload.
+                time_on_attack=int(c.get("toa", 0) or 0) / 60.0,
             )
 
         return MatchDetail(
@@ -411,6 +419,7 @@ def combine_matches(matches: list[MatchDetail]) -> MatchDetail:
             pim=sum(b.pim for b in boxes),
             powerplay_goals=sum(b.powerplay_goals for b in boxes),
             powerplay_opportunities=sum(b.powerplay_opportunities for b in boxes),
+            time_on_attack=sum(b.time_on_attack for b in boxes),
         )
 
     combined_home = sum_team(home_id)
