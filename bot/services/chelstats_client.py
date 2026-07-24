@@ -20,6 +20,22 @@ per-player box score for each match already -- there is no separate
 EA's server also checks the `Referer` header and blocks requests that
 don't set it to an ea.com origin -- every request below sends that.
 
+PROXY REMOVED (as of this fix)
+-------------------------------
+Earlier versions of this file routed requests through a configured
+proxy (`CHELSTATS_PROXY_URL`). That proxy has since started rejecting
+its own credentials (HTTP 407, "Proxy Authentication Required"), which
+broke every match fetch regardless of whether EA itself was reachable.
+
+The proxy was never actually necessary: network diagnostics run earlier
+confirmed that `curl_cffi` with Chrome TLS impersonation gets a clean
+200 directly from EA with no proxy involved at all -- the anti-bot
+protection in front of EA's API cares about the TLS handshake fingerprint,
+not the source IP. Removing the proxy removes a single point of failure
+that had no actual benefit. `split_proxy_credentials` is kept below
+(still used by the network diagnostic command) but is no longer used by
+the actual match-fetching request.
+
 IMPORTANT CAVEATS -- read before assuming a failure is a bug in this code
 --------------------------------------------------------------------------
 1. EA's `club_private` match-history endpoint has been reported
@@ -112,14 +128,9 @@ class ChelStatsError(RuntimeError):
 
 
 def split_proxy_credentials(proxy_url: str) -> tuple[Optional[str], Optional[aiohttp.BasicAuth]]:
-    """aiohttp does not reliably pull username:password out of a proxy URL
-    the way some other HTTP libraries (e.g. requests) do -- it needs the
-    bare scheme://host:port passed as `proxy=` and the credentials passed
-    separately as `proxy_auth=aiohttp.BasicAuth(...)`. Without this split,
-    a proxy requiring auth can silently hang the connection waiting for
-    credentials that never arrive, which looks identical to a network
-    timeout -- this was the actual cause of continued timeouts even after
-    a working proxy URL was configured."""
+    """Kept for the /diagnose-network command's own proxy probe. No longer
+    used by the actual match-fetching request -- see the module docstring
+    for why the proxy was removed from that path."""
     if not proxy_url:
         return None, None
     parsed = urlsplit(proxy_url)
@@ -175,27 +186,19 @@ class ChelStatsClient:
         Chrome TLS handshake, which is what actually gets past this kind
         of protection -- setting a Chrome User-Agent string alone (as
         aiohttp was doing) is not enough.
+
+        No proxy is used here (see module docstring) -- this connects
+        directly to EA, which is the confirmed-working configuration.
         """
         from curl_cffi.requests import AsyncSession
 
         url = f"{self.base_url}{path}"
-        proxy_url, proxy_auth = split_proxy_credentials(settings.chelstats_proxy_url)
-
-        proxies = None
-        if proxy_url:
-            if proxy_auth:
-                scheme, _, rest = proxy_url.partition("://")
-                proxies = {"http": f"{scheme}://{proxy_auth.login}:{proxy_auth.password}@{rest}",
-                           "https": f"{scheme}://{proxy_auth.login}:{proxy_auth.password}@{rest}"}
-            else:
-                proxies = {"http": proxy_url, "https": proxy_url}
 
         async with AsyncSession() as session:
             resp = await session.get(
                 url,
                 params=params,
                 headers=self._headers(),
-                proxies=proxies,
                 timeout=20,
                 impersonate="chrome124",
             )
