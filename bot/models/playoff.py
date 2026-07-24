@@ -4,10 +4,15 @@ bracket round (e.g. "Round 1, Series 2: Italy vs France, best of 5").
 
 Bracket structure is implicit rather than a separate "bracket" table:
 `round_order` (1, 2, 3, ...) plus `series_order` within that round is
-enough to reconstruct the whole tree, and `/league admin advance-round`
-pairs adjacent series_order values (1&2 -> next round's series 1, 3&4 ->
-next round's series 2, etc.) which is how standard single-elimination
-brackets propagate.
+enough to reconstruct the whole tree, and pairs adjacent series_order
+values (1&2 -> next round's series 1, 3&4 -> next round's series 2,
+etc.) which is how standard single-elimination brackets propagate.
+
+The FULL bracket is created upfront by /league admin generate-playoffs
+-- every round's series exist from the start, with team_a_id/team_b_id
+left null ("TBD") for any round beyond the first until the previous
+round's winners are actually known. `services/playoff_service.py` fills
+those slots in automatically as each series is decided.
 
 `ScheduleGame.playoff_series_id` links individual games to the series
 they count toward; `wins_a`/`wins_b` are updated by
@@ -33,8 +38,10 @@ class PlayoffSeries(Base, IDMixin, TimestampMixin):
     round_order: Mapped[int] = mapped_column(Integer, nullable=False)  # 1, 2, 3... for bracket propagation
     series_order: Mapped[int] = mapped_column(Integer, nullable=False)  # position within the round
 
-    team_a_id: Mapped[int] = mapped_column(ForeignKey("teams.id", ondelete="CASCADE"), nullable=False)
-    team_b_id: Mapped[int] = mapped_column(ForeignKey("teams.id", ondelete="CASCADE"), nullable=False)
+    # Nullable -- a series in a future round starts as TBD/TBD until the
+    # previous round's winners are actually known.
+    team_a_id: Mapped[Optional[int]] = mapped_column(ForeignKey("teams.id", ondelete="CASCADE"), nullable=True)
+    team_b_id: Mapped[Optional[int]] = mapped_column(ForeignKey("teams.id", ondelete="CASCADE"), nullable=True)
     seed_a: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     seed_b: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
@@ -45,8 +52,8 @@ class PlayoffSeries(Base, IDMixin, TimestampMixin):
     winner_team_id: Mapped[Optional[int]] = mapped_column(ForeignKey("teams.id", ondelete="SET NULL"), nullable=True)
 
     season: Mapped["Season"] = relationship()
-    team_a: Mapped["Team"] = relationship(foreign_keys=[team_a_id])
-    team_b: Mapped["Team"] = relationship(foreign_keys=[team_b_id])
+    team_a: Mapped[Optional["Team"]] = relationship(foreign_keys=[team_a_id])
+    team_b: Mapped[Optional["Team"]] = relationship(foreign_keys=[team_b_id])
     winner_team: Mapped[Optional["Team"]] = relationship(foreign_keys=[winner_team_id])
 
     @property
