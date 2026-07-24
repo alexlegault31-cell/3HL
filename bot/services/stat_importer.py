@@ -174,6 +174,7 @@ async def import_game(
             pim=home_box.pim,
             powerplay_goals=home_box.powerplay_goals,
             powerplay_opportunities=home_box.powerplay_opportunities,
+            time_on_attack=home_box.time_on_attack,
         )
     )
     session.add(
@@ -187,6 +188,7 @@ async def import_game(
             pim=away_box.pim,
             powerplay_goals=away_box.powerplay_goals,
             powerplay_opportunities=away_box.powerplay_opportunities,
+            time_on_attack=away_box.time_on_attack,
         )
     )
 
