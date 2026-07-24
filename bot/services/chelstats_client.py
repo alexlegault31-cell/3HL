@@ -91,14 +91,17 @@ class PlayerBoxScore:
     pass_attempts: int = 0
     passes_completed: int = 0
     position: str = ""
+    minutes_played: float = 0.0  # time on ice
+    time_with_puck: float = 0.0  # "TwP" -- confirmed real field, seen in earlier match payloads
 
     # goalie fields
     shots_against: int = 0
     saves: int = 0
     goals_against: int = 0
-    minutes_played: float = 0.0
     is_win: bool = False
     is_ot_loss: bool = False
+    poke_checks: int = 0  # "PkChk" -- best-guess EA field name, see note in _normalize_match
+    desperation_saves: int = 0  # "DespSv" -- best-guess EA field name, see note in _normalize_match
 
 
 @dataclass
@@ -308,12 +311,22 @@ class ChelStatsClient:
                         giveaways=int(p.get("skgiveaways", 0) or 0),
                         pass_attempts=int(p.get("skpassattempts", 0) or 0),
                         passes_completed=int(p.get("skpasses", 0) or 0),
+                        time_with_puck=int(p.get("skpossession", 0) or 0) / 60.0,
                         shots_against=shots_against,
                         saves=int(p.get("glsaves", 0) or 0),
                         goals_against=int(p.get("glga", 0) or 0),
                         minutes_played=toi_seconds / 60.0,
                         is_win=is_win if is_goalie else False,
                         is_ot_loss=False,  # filled in below, once we know match length
+                        # NOT CONFIRMED -- these two field names are a best
+                        # guess based on EA's naming pattern (gl-prefix for
+                        # goalie stats), not verified against a real payload
+                        # the way every other field above is. If poke checks
+                        # / desperation saves show up as 0 for a goalie you
+                        # know made some, these key names are wrong and need
+                        # checking against a real GameImport.raw_payload.
+                        poke_checks=int(p.get("glpokechecks", 0) or 0),
+                        desperation_saves=int(p.get("gldsaves", 0) or 0),
                     )
                 )
 
@@ -437,6 +450,9 @@ def combine_matches(matches: list[MatchDetail]) -> MatchDetail:
             existing.saves += p.saves
             existing.goals_against += p.goals_against
             existing.minutes_played += p.minutes_played
+            existing.time_with_puck += p.time_with_puck
+            existing.poke_checks += p.poke_checks
+            existing.desperation_saves += p.desperation_saves
             # Win/OT-loss reflect the FINAL match part's outcome, not each
             # individual part (the earlier parts were interrupted, not won
             # or lost in their own right).
