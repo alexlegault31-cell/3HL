@@ -20,6 +20,7 @@ from bot.graphics.combined_leaders_board import render_combined_leaders_board
 from bot.graphics.game_result_graphic import render_game_result
 from bot.graphics.player_card import render_player_card
 from bot.graphics.playoff_bracket import render_playoff_bracket
+from bot.graphics.schedule_graphic import render_schedule
 from bot.graphics.standings_graphic import render_standings
 from bot.graphics.team_card import render_team_card
 from bot.models import (
@@ -969,8 +970,27 @@ class LeagueCog(commands.Cog):
                 )
                 return
 
+            # The league's fixed weekly time slots -- always these 4 days
+            # at these 3 times, cycled through in order for each week's
+            # games (fills each day's 3 times before moving to the next
+            # day, e.g. Tue 8:00 -> Tue 8:30 -> Tue 9:00 -> Wed 8:00 ...).
+            SLOT_SEQUENCE = [
+                ("Tuesday", "8:00 PM EST"), ("Tuesday", "8:30 PM EST"), ("Tuesday", "9:00 PM EST"),
+                ("Wednesday", "8:00 PM EST"), ("Wednesday", "8:30 PM EST"), ("Wednesday", "9:00 PM EST"),
+                ("Thursday", "8:00 PM EST"), ("Thursday", "8:30 PM EST"), ("Thursday", "9:00 PM EST"),
+                ("Friday", "8:00 PM EST"), ("Friday", "8:30 PM EST"), ("Friday", "9:00 PM EST"),
+            ]
+
             created_count = 0
+            current_round = None
+            slot_index = 0
             for m in matchups:
+                if m.round_number != current_round:
+                    current_round = m.round_number
+                    slot_index = 0
+                day_of_week, game_time = SLOT_SEQUENCE[slot_index % len(SLOT_SEQUENCE)]
+                slot_index += 1
+
                 session.add(
                     ScheduleGame(
                         season_id=s.id,
@@ -978,6 +998,8 @@ class LeagueCog(commands.Cog):
                         week=m.round_number,
                         home_team_id=m.home_team_id,
                         away_team_id=m.away_team_id,
+                        day_of_week=day_of_week,
+                        game_time=game_time,
                     )
                 )
                 next_number += 1
@@ -1113,23 +1135,7 @@ class LeagueCog(commands.Cog):
     @refresh_group.command(name="fixture", description="Re-post the current schedule")
     @commissioner_only()
     async def refresh_fixture(self, interaction: discord.Interaction, season: int | None = None):
-        async with get_session() as session:
-            try:
-                s = await resolve_season(session, season)
-            except SeasonNotFound as e:
-                await interaction.response.send_message(embed=error_embed("Season error", str(e)), ephemeral=True)
-                return
-            games = (await session.execute(select(ScheduleGame).where(ScheduleGame.season_id == s.id).order_by(ScheduleGame.game_number))).scalars().all()
-            if not games:
-                await interaction.response.send_message(embed=info_embed("No schedule", f"No games scheduled yet for {s.name}."))
-                return
-            lines = []
-            for g in games[:40]:
-                home = await session.get(Team, g.home_team_id)
-                away = await session.get(Team, g.away_team_id)
-                icon = "✅" if g.status == ScheduleStatus.PLAYED else ("🚫" if g.status == ScheduleStatus.FORFEITED else "🕒")
-                lines.append(f"{icon} `#{g.game_number}` {home.name} vs {away.name}")
-        await interaction.response.send_message(embed=info_embed(f"Schedule — {s.name}", "\n".join(lines)))
+        await self._send_schedule(interaction, season=season, week=None, status=None)
 
     @refresh_group.command(name="playoffs", description="Re-post the playoff bracket")
     @commissioner_only()
@@ -1162,10 +1168,27 @@ class LeagueCog(commands.Cog):
     # ==================================================================
 
     @schedule_group.command(name="add", description="Schedule a match")
-    @app_commands.describe(game_number="Unique game number, used by /league admin submit-game", home_team="Home club", away_team="Away club", week="Week number")
+    @app_commands.describe(
+        game_number="Unique game number, used by /league admin submit-game",
+        home_team="Home club",
+        away_team="Away club",
+        week="Week number",
+        day_of_week="e.g. Tuesday (optional)",
+        game_time="e.g. 8:00 PM EST (optional)",
+    )
     @app_commands.autocomplete(home_team=team_name_autocomplete, away_team=team_name_autocomplete)
     @commissioner_only()
-    async def schedule_add(self, interaction: discord.Interaction, game_number: int, home_team: str, away_team: str, week: int | None = None, season: int | None = None):
+    async def schedule_add(
+        self,
+        interaction: discord.Interaction,
+        game_number: int,
+        home_team: str,
+        away_team: str,
+        week: int | None = None,
+        day_of_week: str | None = None,
+        game_time: str | None = None,
+        season: int | None = None,
+    ):
         async with get_session() as session:
             try:
                 s = await resolve_season(session, season)
@@ -1181,7 +1204,13 @@ class LeagueCog(commands.Cog):
             if existing:
                 await interaction.response.send_message(embed=error_embed("Already scheduled", f"Game #{game_number} already exists for {s.name}."), ephemeral=True)
                 return
-            session.add(ScheduleGame(season_id=s.id, game_number=game_number, week=week, home_team_id=home.id, away_team_id=away.id))
+            session.add(
+                ScheduleGame(
+                    season_id=s.id, game_number=game_number, week=week,
+                    home_team_id=home.id, away_team_id=away.id,
+                    day_of_week=day_of_week, game_time=game_time,
+                )
+            )
         await interaction.response.send_message(embed=success_embed("Scheduled", f"Game #{game_number}: **{home_team}** vs **{away_team}** added to {s.name}."))
 
     @schedule_group.command(name="view", description="View the full schedule")
@@ -1235,40 +1264,33 @@ class LeagueCog(commands.Cog):
         return None
 
     async def _send_schedule(self, interaction: discord.Interaction, *, season: int | None, week: int | None, status: ScheduleStatus | None):
+        await interaction.response.defer()
         async with get_session() as session:
             try:
                 s = await resolve_season(session, season)
             except SeasonNotFound as e:
-                await interaction.response.send_message(embed=error_embed("Season error", str(e)), ephemeral=True)
+                await interaction.followup.send(embed=error_embed("Season error", str(e)))
                 return
             stmt = select(ScheduleGame).where(ScheduleGame.season_id == s.id)
             if week is not None:
                 stmt = stmt.where(ScheduleGame.week == week)
             if status is not None:
                 stmt = stmt.where(ScheduleGame.status == status)
-            stmt = stmt.order_by(ScheduleGame.game_number)
+            stmt = stmt.order_by(ScheduleGame.week, ScheduleGame.game_number)
             games = (await session.execute(stmt)).scalars().all()
             if not games:
-                await interaction.response.send_message(embed=info_embed("No games", "No matching games found."))
+                await interaction.followup.send(embed=info_embed("No games", "No matching games found."))
                 return
-            lines = []
-            for g in games:
-                home = await session.get(Team, g.home_team_id)
-                away = await session.get(Team, g.away_team_id)
-                icon = {
-                    ScheduleStatus.SCHEDULED: "🕒",
-                    ScheduleStatus.PLAYED: "✅",
-                    ScheduleStatus.FORFEITED: "🚫",
-                    ScheduleStatus.POSTPONED: "⏸️",
-                    ScheduleStatus.CANCELLED: "❌",
-                }[g.status]
-                week_str = f"Wk{g.week} " if g.week else ""
-                lines.append(f"{icon} `#{g.game_number}` {week_str}{home.name} vs {away.name}")
-            chunks = ["\n".join(lines[i : i + 25]) for i in range(0, len(lines), 25)]
-        title = f"Schedule — {s.name}"
-        await interaction.response.send_message(embed=info_embed(title, chunks[0]))
-        for chunk in chunks[1:]:
-            await interaction.followup.send(embed=info_embed(title, chunk))
+
+            all_team_ids = {t_id for g in games for t_id in (g.home_team_id, g.away_team_id)}
+            teams_by_id = {t_id: await session.get(Team, t_id) for t_id in all_team_ids}
+            league_logo_url = await get_league_logo_url(session, interaction.guild_id)
+            background_url = await get_league_background_url(session, interaction.guild_id)
+
+            title = "PENDING GAMES" if status == ScheduleStatus.SCHEDULED else (f"WEEK {week} SCHEDULE" if week is not None else "SCHEDULE")
+            path = await render_schedule(title, s.name, games, teams_by_id, league_logo_url, background_url)
+
+        await interaction.followup.send(file=discord.File(path))
 
     async def _generate_and_attach_recap(self, session, game: Game, home_team: Team, away_team: Team) -> str:
         from bot.models import GoalieGameStat, PlayerGameStat
