@@ -478,7 +478,11 @@ async def apply_team_season_delta(
     if goals_for > goals_against:
         ts.wins += 1
         ts.points += 2
-        result = "W"
+        if went_ot:
+            ts.ot_wins += 1  # subset of wins, not counted separately
+            result = "T"
+        else:
+            result = "W"
     elif went_ot:
         ts.ot_losses += 1
         ts.points += 1
@@ -507,6 +511,8 @@ def undo_team_result(ts: TeamSeason, goals_for: int, goals_against: int, went_ot
     if goals_for > goals_against:
         ts.wins -= 1
         ts.points -= 2
+        if went_ot:
+            ts.ot_wins -= 1
     elif went_ot:
         ts.ot_losses -= 1
         ts.points -= 1
