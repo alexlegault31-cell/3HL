@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import uuid
 
-from bot.graphics.logo_fetch import get_team_logo
 from bot.graphics.theme import GENERATED_DIR, Theme, load_font, prepare_canvas
 from bot.services.leaders_service import LeaderRow
 
@@ -36,10 +35,6 @@ async def render_combined_leaders_board(
 
     draw.text((PADDING, 20), "STAT LEADERS", font=title_font, fill=(255, 255, 255))
     draw.text((PADDING, 62), season_label, font=sub_font, fill=(210, 216, 230))
-
-    league_logo = await get_team_logo(league_logo_url, (64, 64))
-    if league_logo is not None:
-        img.paste(league_logo, (width - PADDING - 64, 14), league_logo.split()[-1])
 
     grid_top = PADDING + BANNER_H
 
