@@ -62,6 +62,34 @@ from bot.utils.checks import commissioner_only, gm_only
 from bot.utils.embeds import error_embed, info_embed, success_embed
 
 
+async def team_name_autocomplete(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
+    """Shared autocomplete for every club-name text field -- Discord shows
+    this as a live filtered dropdown as the user types, built from
+    whatever clubs actually exist in the league rather than a fixed list.
+    Module-level (not a class method) since it needs to be fully defined
+    before any command in the class below references it in a decorator."""
+    async with get_session() as session:
+        stmt = select(Team.name).where(Team.is_active.is_(True))
+        if current:
+            stmt = stmt.where(Team.name.ilike(f"%{current}%"))
+        stmt = stmt.order_by(Team.name).limit(25)
+        names = (await session.execute(stmt)).scalars().all()
+    return [app_commands.Choice(name=n, value=n) for n in names]
+
+
+async def player_gamertag_autocomplete(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
+    """Shared autocomplete for existing-player gamertag text fields (NOT
+    used for /league player add, since that command is for typing a
+    brand-new player's name)."""
+    async with get_session() as session:
+        stmt = select(Player.gamertag)
+        if current:
+            stmt = stmt.where(Player.gamertag.ilike(f"%{current}%"))
+        stmt = stmt.order_by(Player.gamertag).limit(25)
+        names = (await session.execute(stmt)).scalars().all()
+    return [app_commands.Choice(name=n, value=n) for n in names]
+
+
 class LeagueCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -164,6 +192,7 @@ class LeagueCog(commands.Cog):
 
     @club_group.command(name="remove", description="Remove a club from the league (soft-delete, preserves history)")
     @app_commands.describe(name="Club name to remove")
+    @app_commands.autocomplete(name=team_name_autocomplete)
     @commissioner_only()
     async def club_remove(self, interaction: discord.Interaction, name: str):
         async with get_session() as session:
@@ -176,6 +205,7 @@ class LeagueCog(commands.Cog):
 
     @club_group.command(name="swap", description="Change a club's linked EASHL Club ID")
     @app_commands.describe(name="Club name", new_club_id="New EASHL Club ID", season="Season number (defaults to active)")
+    @app_commands.autocomplete(name=team_name_autocomplete)
     @commissioner_only()
     async def club_swap(self, interaction: discord.Interaction, name: str, new_club_id: int, season: int | None = None):
         async with get_session() as session:
@@ -200,6 +230,7 @@ class LeagueCog(commands.Cog):
 
     @club_group.command(name="add-logo", description="Set a club's logo")
     @app_commands.describe(name="Club name", logo_url="Direct image URL for the logo")
+    @app_commands.autocomplete(name=team_name_autocomplete)
     @commissioner_only()
     async def club_add_logo(self, interaction: discord.Interaction, name: str, logo_url: str):
         async with get_session() as session:
@@ -212,6 +243,7 @@ class LeagueCog(commands.Cog):
 
     @club_group.command(name="stats", description="View a club's record for a season")
     @app_commands.describe(name="Club name", season="Season number (defaults to active)")
+    @app_commands.autocomplete(name=team_name_autocomplete)
     async def club_stats(self, interaction: discord.Interaction, name: str, season: int | None = None):
         await interaction.response.defer()
         async with get_session() as session:
@@ -255,6 +287,7 @@ class LeagueCog(commands.Cog):
 
     @player_group.command(name="add", description="Add a player to a club's roster")
     @app_commands.describe(gamertag="Player gamertag", club="Club name", season="Season number (defaults to active)")
+    @app_commands.autocomplete(club=team_name_autocomplete)
     @gm_only()
     async def player_add(self, interaction: discord.Interaction, gamertag: str, club: str, season: int | None = None):
         async with get_session() as session:
@@ -292,6 +325,7 @@ class LeagueCog(commands.Cog):
 
     @player_group.command(name="move", description="Move a player to a different club")
     @app_commands.describe(gamertag="Player gamertag", new_club="New club name", season="Season number (defaults to active)")
+    @app_commands.autocomplete(gamertag=player_gamertag_autocomplete, new_club=team_name_autocomplete)
     @gm_only()
     async def player_move(self, interaction: discord.Interaction, gamertag: str, new_club: str, season: int | None = None):
         async with get_session() as session:
@@ -327,6 +361,7 @@ class LeagueCog(commands.Cog):
 
     @player_group.command(name="remove", description="Remove a player from their current club")
     @app_commands.describe(gamertag="Player gamertag", season="Season number (defaults to active)")
+    @app_commands.autocomplete(gamertag=player_gamertag_autocomplete)
     @gm_only()
     async def player_remove(self, interaction: discord.Interaction, gamertag: str, season: int | None = None):
         async with get_session() as session:
@@ -355,14 +390,28 @@ class LeagueCog(commands.Cog):
         await interaction.response.send_message(embed=success_embed("Player removed", f"**{gamertag}** removed from their club for {s.name}."))
 
     @player_group.command(name="stats", description="View a player's season stats card")
-    @app_commands.describe(gamertag="Player gamertag (defaults to your linked account)", season="Season number (defaults to active)")
-    async def player_stats(self, interaction: discord.Interaction, gamertag: str | None = None, season: int | None = None):
+    @app_commands.describe(
+        discord_user="Pick a Discord member (uses their linked EA gamertag) -- defaults to you",
+        gamertag="Or type an EA gamertag directly, if they haven't linked their account",
+        season="Season number (defaults to active)",
+    )
+    async def player_stats(
+        self,
+        interaction: discord.Interaction,
+        discord_user: discord.Member | None = None,
+        gamertag: str | None = None,
+        season: int | None = None,
+    ):
         await interaction.response.defer()
         async with get_session() as session:
-            player = await self._resolve_player(session, interaction, gamertag)
+            player = await self._resolve_player(session, interaction, gamertag, discord_user)
             if player is None:
+                who = discord_user.mention if discord_user else "That account"
                 await interaction.followup.send(
-                    embed=error_embed("No player found", "Provide a gamertag or link your account with `/league player add` / linking your account first.")
+                    embed=error_embed(
+                        "No player found",
+                        f"{who} hasn't linked an EA gamertag yet -- use `/league player link` first, or provide a gamertag directly.",
+                    )
                 )
                 return
             try:
@@ -391,6 +440,32 @@ class LeagueCog(commands.Cog):
             path = await render_player_card(player, ps, team, s.name, league_logo_url, background_url)
 
         await interaction.followup.send(file=discord.File(path))
+
+    @player_group.command(name="link", description="Link your Discord account to your EA gamertag")
+    @app_commands.describe(gamertag="Your EA gamertag")
+    async def player_link(self, interaction: discord.Interaction, gamertag: str):
+        async with get_session() as session:
+            player = await session.scalar(select(Player).where(Player.gamertag.ilike(gamertag)))
+            if player is None:
+                await interaction.response.send_message(
+                    embed=error_embed(
+                        "Unknown gamertag",
+                        f"No player named **{gamertag}** exists yet -- they need to be added to a club first with `/league player add` before you can link to them.",
+                    ),
+                    ephemeral=True,
+                )
+                return
+
+            existing_user = await session.scalar(select(User).where(User.discord_id == interaction.user.id))
+            if existing_user is None:
+                session.add(User(discord_id=interaction.user.id, player_id=player.id))
+            else:
+                existing_user.player_id = player.id
+
+        await interaction.response.send_message(
+            embed=success_embed("Linked", f"Your Discord account is now linked to **{gamertag}**. Anyone can now pick you in `/league player stats` and it'll pull your stats automatically."),
+            ephemeral=True,
+        )
 
     # ==================================================================
     # /league list
@@ -576,6 +651,7 @@ class LeagueCog(commands.Cog):
         reason="Reason for the forfeit",
         game_number="Schedule game number this forfeit applies to (optional -- auto-detected if omitted)",
     )
+    @app_commands.autocomplete(winning_team=team_name_autocomplete, losing_team=team_name_autocomplete)
     @commissioner_only()
     async def admin_forfeit_game(
         self,
@@ -1050,6 +1126,7 @@ class LeagueCog(commands.Cog):
 
     @schedule_group.command(name="add", description="Schedule a match")
     @app_commands.describe(game_number="Unique game number, used by /league admin submit-game", home_team="Home club", away_team="Away club", week="Week number")
+    @app_commands.autocomplete(home_team=team_name_autocomplete, away_team=team_name_autocomplete)
     @commissioner_only()
     async def schedule_add(self, interaction: discord.Interaction, game_number: int, home_team: str, away_team: str, week: int | None = None, season: int | None = None):
         async with get_session() as session:
@@ -1109,10 +1186,13 @@ class LeagueCog(commands.Cog):
     # ==================================================================
 
     @staticmethod
-    async def _resolve_player(session, interaction: discord.Interaction, gamertag: str | None) -> Player | None:
+    async def _resolve_player(
+        session, interaction: discord.Interaction, gamertag: str | None, discord_user: "discord.Member | discord.User | None" = None
+    ) -> Player | None:
         if gamertag:
             return await session.scalar(select(Player).where(Player.gamertag.ilike(gamertag)))
-        user = await session.scalar(select(User).where(User.discord_id == interaction.user.id))
+        target_id = discord_user.id if discord_user else interaction.user.id
+        user = await session.scalar(select(User).where(User.discord_id == target_id))
         if user and user.player_id:
             return await session.get(Player, user.player_id)
         return None
