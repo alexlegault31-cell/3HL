@@ -702,11 +702,16 @@ class LeagueCog(commands.Cog):
             embed.add_field(name="Recap", value=recap_text, inline=False)
         if series_status_text:
             embed.add_field(name="Playoff Series", value=series_status_text, inline=False)
+
+        # Post to the public results channel BEFORE adding unlinked-player
+        # info -- that's only relevant to whoever ran the command, not the
+        # whole server, so it must never end up in the public embed copy.
+        await self._post_to_results_channel(interaction, embed, graphic_path, recap_graphic_path)
+
         if unlinked:
             lines = "\n".join(f"• **{u.gamertag}**, played this game with {u.team_name}." for u in unlinked)
             embed.add_field(name="⚠️ Unlinked Players Found", value=lines, inline=False)
         await interaction.followup.send(embed=embed, files=[discord.File(graphic_path), discord.File(recap_graphic_path)])
-        await self._post_to_results_channel(interaction, embed, graphic_path, recap_graphic_path)
 
     @admin_group.command(name="forfeit-game", description="Enforce a club forfeit on a match")
     @app_commands.describe(
