@@ -24,15 +24,21 @@ async def render_team_card(
     leaders_lines: list[str],
     league_logo_url: str | None = None,
     background_url: str | None = None,
+    recent_results: list | None = None,
 ) -> str:
+    recent_results = recent_results or []
+    recap_h = (34 + len(recent_results) * 26 + 16) if recent_results else 0
+    height = HEIGHT + recap_h
+
     accent = Theme.team_color(team)
-    img, draw = await prepare_canvas(WIDTH, HEIGHT, accent, background_url, banner_height=BANNER_H)
+    img, draw = await prepare_canvas(WIDTH, height, accent, background_url, banner_height=BANNER_H)
 
     name_font = load_font("Black", 38)
     sub_font = load_font("Regular", 20)
     stat_label_font = load_font("Bold", 16)
     stat_val_font = load_font("Black", 34)
     leader_font = load_font("Regular", 18)
+    recap_font = load_font("Regular", 17)
 
     draw.text((32, 24), team.name, font=name_font, fill=(255, 255, 255))
     draw.text((34, 74), season_label, font=sub_font, fill=(210, 216, 230))
@@ -69,6 +75,21 @@ async def render_team_card(
     for line in leaders_lines[:2]:
         draw.text((56, y), line, font=leader_font, fill=Theme.TEXT_SECONDARY)
         y += 24
+
+    if recent_results:
+        recap_top = HEIGHT - 4
+        draw.line([(56, recap_top), (WIDTH - 56, recap_top)], fill=Theme.BORDER, width=1)
+        draw.text((56, recap_top + 10), "RECENT RESULTS", font=stat_label_font, fill=Theme.TEXT_MUTED)
+        ry = recap_top + 34
+        for r in recent_results:
+            win_color = Theme.WIN_GREEN if r.is_win else Theme.LOSS_RED
+            suffix = " (OT)" if r.is_ot else (" (forfeit)" if r.is_forfeit else "")
+            if r.is_home:
+                line = f"{team.name} {r.goals_for} - {r.goals_against} {r.opponent.name}{suffix}"
+            else:
+                line = f"{r.opponent.name} {r.goals_against} - {r.goals_for} {team.name}{suffix}"
+            draw.text((56, ry), line, font=recap_font, fill=win_color)
+            ry += 26
 
     out_path = GENERATED_DIR / f"team_{team.id}_{uuid.uuid4().hex[:8]}.png"
     img.save(out_path)
