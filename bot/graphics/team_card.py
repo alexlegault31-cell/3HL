@@ -6,7 +6,6 @@ from __future__ import annotations
 import uuid
 from typing import Sequence
 
-from bot.graphics.logo_fetch import get_team_logo
 from bot.graphics.theme import GENERATED_DIR, Theme, load_font, prepare_canvas
 from bot.models import Team, TeamSeason
 from bot.services.leaders_service import LeaderRow
@@ -42,14 +41,6 @@ async def render_team_card(
 
     draw.text((32, 24), team.name, font=name_font, fill=(255, 255, 255))
     draw.text((34, 74), season_label, font=sub_font, fill=(210, 216, 230))
-
-    logo = await get_team_logo(team.logo_url, (CARD_LOGO_SIZE, CARD_LOGO_SIZE))
-    if logo is not None:
-        img.paste(logo, (WIDTH - 32 - CARD_LOGO_SIZE, 20), logo.split()[-1])
-
-    league_logo = await get_team_logo(league_logo_url, (44, 44))
-    if league_logo is not None:
-        img.paste(league_logo, (WIDTH - 32 - CARD_LOGO_SIZE - 56, 33), league_logo.split()[-1])
 
     stats = [
         ("RECORD", f"{team_season.wins}-{team_season.losses}-{team_season.ot_losses}"),
@@ -121,10 +112,6 @@ async def render_leaders_board(
     draw.text((40, 24), title.upper(), font=title_font, fill=(255, 255, 255))
     draw.text((40, 66), season_label, font=sub_font, fill=(210, 216, 230))
 
-    league_logo = await get_team_logo(league_logo_url, (60, 60))
-    if league_logo is not None:
-        img.paste(league_logo, (width - 40 - 60, 18), league_logo.split()[-1])
-
     draw.line([(40, header_h - 6), (width - 40, header_h - 6)], fill=accent_color, width=2)
 
     if not rows:
@@ -144,12 +131,6 @@ async def render_leaders_board(
             draw.text((48, y + 10), str(row.rank), font=rank_font, fill=Theme.TEXT_MUTED)
 
         name_x = 96
-        if row.team is not None:
-            logo = await get_team_logo(row.team.logo_url, (ROW_LOGO_SIZE, ROW_LOGO_SIZE))
-            if logo is not None:
-                img.paste(logo, (name_x, y + 11), logo.split()[-1])
-                name_x += ROW_LOGO_SIZE + 10
-
         name = row.player.gamertag
         team_suffix = f"  ·  {row.team.name}" if row.team else ""
         draw.text((name_x, y + 6), name, font=row_font, fill=Theme.TEXT_PRIMARY)
