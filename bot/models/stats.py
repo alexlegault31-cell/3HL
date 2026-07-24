@@ -38,6 +38,8 @@ class PlayerGameStat(Base, IDMixin, TimestampMixin):
     pass_attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     passes_completed: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     position: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+    minutes_played: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)  # time on ice
+    time_with_puck: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)  # "TwP"
 
     game: Mapped["Game"] = relationship()
     player: Mapped["Player"] = relationship()
@@ -58,6 +60,8 @@ class GoalieGameStat(Base, IDMixin, TimestampMixin):
     goals_against: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     minutes_played: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     shutout: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    poke_checks: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    desperation_saves: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
     game: Mapped["Game"] = relationship()
     player: Mapped["Player"] = relationship()
