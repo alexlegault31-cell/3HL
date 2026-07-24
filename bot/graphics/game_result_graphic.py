@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import uuid
 
+from bot.graphics.logo_fetch import get_team_logo
 from bot.graphics.theme import GENERATED_DIR, Theme, load_font, prepare_canvas
 from bot.models import Game, Team
 
 WIDTH, HEIGHT = 1000, 460
+CORNER_LOGO_SIZE = 64
 
 
 async def render_game_result(
@@ -27,6 +29,17 @@ async def render_game_result(
     # anchored to their brand colors.
     draw.rectangle([(0, 0), (WIDTH // 2, 14)], fill=home_color)
     draw.rectangle([(WIDTH // 2, 0), (WIDTH, 14)], fill=away_color)
+
+    home_logo = await get_team_logo(home_team.logo_url, (CORNER_LOGO_SIZE, CORNER_LOGO_SIZE))
+    if home_logo is not None:
+        img.paste(home_logo, (18, 18), home_logo.split()[-1])
+    away_logo = await get_team_logo(away_team.logo_url, (CORNER_LOGO_SIZE, CORNER_LOGO_SIZE))
+    if away_logo is not None:
+        img.paste(away_logo, (WIDTH - 18 - CORNER_LOGO_SIZE, 18), away_logo.split()[-1])
+
+    league_logo = await get_team_logo(league_logo_url, (40, 40))
+    if league_logo is not None:
+        img.paste(league_logo, (WIDTH // 2 - 20, 18), league_logo.split()[-1])
 
     label_font = load_font("Bold", 26)
     name_font = load_font("Black", 46)
