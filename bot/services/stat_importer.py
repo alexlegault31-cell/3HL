@@ -226,6 +226,7 @@ async def import_game(
                 giveaways=box.giveaways,
                 pass_attempts=box.pass_attempts,
                 passes_completed=box.passes_completed,
+                position=box.position or None,
             )
             session.add(line)
             player_lines.append(line)
