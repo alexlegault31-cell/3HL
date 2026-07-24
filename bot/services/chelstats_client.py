@@ -90,6 +90,7 @@ class PlayerBoxScore:
     giveaways: int = 0
     pass_attempts: int = 0
     passes_completed: int = 0
+    position: str = ""
 
     # goalie fields
     shots_against: int = 0
@@ -291,6 +292,7 @@ class ChelStatsClient:
                         external_player_id=str(player_id_key),
                         club_id=int(cid),
                         is_goalie=is_goalie,
+                        position=str(p.get("position", "")),
                         goals=int(p.get("skgoals", 0) or 0),
                         assists=int(p.get("skassists", 0) or 0),
                         plus_minus=int(p.get("skplusmin", 0) or 0),
@@ -413,6 +415,7 @@ def combine_matches(matches: list[MatchDetail]) -> MatchDetail:
                     external_player_id=p.external_player_id,
                     club_id=p.club_id,
                     is_goalie=p.is_goalie,
+                    position=p.position,
                 )
             existing = merged_players[key]
             existing.goals += p.goals
