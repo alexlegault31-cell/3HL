@@ -17,6 +17,7 @@ from bot.cogs.channel_updater import refresh_all_channels
 from bot.config import settings
 from bot.database import get_session
 from bot.graphics.combined_leaders_board import render_combined_leaders_board
+from bot.graphics.game_recap_graphic import render_game_recap
 from bot.graphics.game_result_graphic import render_game_result
 from bot.graphics.player_card import render_player_card
 from bot.graphics.playoff_bracket import render_playoff_bracket
@@ -34,6 +35,7 @@ from bot.models import (
     Season,
     StandingsEntry,
     Team,
+    TeamGameStat,
     TeamSeason,
     User,
 )
@@ -649,6 +651,31 @@ class LeagueCog(commands.Cog):
             graphic_path = await render_game_result(result.game, result.home_team, result.away_team, league_logo_url, background_url)
             result.game.result_graphic_path = graphic_path
 
+            # Build the detailed combined recap graphic: team-level stat
+            # lines + (Player, stat_line) pairs split by which team each
+            # player belongs to.
+            home_team_stat = await session.scalar(
+                select(TeamGameStat).where(TeamGameStat.game_id == result.game.id, TeamGameStat.team_id == result.home_team.id)
+            )
+            away_team_stat = await session.scalar(
+                select(TeamGameStat).where(TeamGameStat.game_id == result.game.id, TeamGameStat.team_id == result.away_team.id)
+            )
+            home_skaters, away_skaters = [], []
+            for line in result.player_lines:
+                player = await session.get(Player, line.player_id)
+                (home_skaters if line.team_id == result.home_team.id else away_skaters).append((player, line))
+            home_goalies, away_goalies = [], []
+            for line in result.goalie_lines:
+                player = await session.get(Player, line.player_id)
+                (home_goalies if line.team_id == result.home_team.id else away_goalies).append((player, line))
+
+            recap_graphic_path = await render_game_recap(
+                result.game, result.home_team, result.away_team,
+                home_team_stat, away_team_stat,
+                home_skaters, home_goalies, away_skaters, away_goalies,
+                league_logo_url, background_url,
+            )
+
             series = await record_series_result(session, result.schedule, result.game)
             series_status_text = None
             if series is not None:
@@ -678,8 +705,8 @@ class LeagueCog(commands.Cog):
         if unlinked:
             lines = "\n".join(f"• **{u.gamertag}**, played this game with {u.team_name}." for u in unlinked)
             embed.add_field(name="⚠️ Unlinked Players Found", value=lines, inline=False)
-        await interaction.followup.send(embed=embed, file=discord.File(graphic_path))
-        await self._post_to_results_channel(interaction, embed, graphic_path)
+        await interaction.followup.send(embed=embed, files=[discord.File(graphic_path), discord.File(recap_graphic_path)])
+        await self._post_to_results_channel(interaction, embed, graphic_path, recap_graphic_path)
 
     @admin_group.command(name="forfeit-game", description="Enforce a club forfeit on a match")
     @app_commands.describe(
@@ -1320,14 +1347,17 @@ class LeagueCog(commands.Cog):
         game.recap_text = recap
         return recap
 
-    async def _post_to_results_channel(self, interaction: discord.Interaction, embed: discord.Embed, graphic_path: str) -> None:
+    async def _post_to_results_channel(self, interaction: discord.Interaction, embed: discord.Embed, graphic_path: str, extra_graphic_path: str | None = None) -> None:
         if not settings.channel_game_results:
             return
         channel = interaction.client.get_channel(settings.channel_game_results)
         if channel is None:
             return
+        files = [discord.File(graphic_path)]
+        if extra_graphic_path:
+            files.append(discord.File(extra_graphic_path))
         try:
-            await channel.send(embed=embed, file=discord.File(graphic_path))
+            await channel.send(embed=embed, files=files)
         except discord.HTTPException:
             pass
 
