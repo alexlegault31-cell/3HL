@@ -19,23 +19,7 @@ from bot.services.leaders_service import LeaderRow
 WIDTH = 900
 BANNER_H = 110
 STAT_ROW_H = 90
-FORM_ROW_H = 90
-MEMBERS_HEADER_H = 40
-ROSTER_ROW_H = 26
-HISTORY_ROW_H = 26
-LOGO_SIZE = 72
-
-RESULT_COLORS = {"W": Theme.WIN_GREEN, "T": Theme.GOLD, "L": Theme.LOSS_RED, "O": (74, 144, 226)}
-RESULT_LABELS = {"W": "W", "T": "OTW", "L": "L", "O": "OTL"}
-
-
-from bot.graphics.theme import GENERATED_DIR, Theme, load_font, prepare_canvas
-from bot.models import Team, TeamSeason
-
-WIDTH = 900
-BANNER_H = 110
-STAT_ROW_H = 90
-FORM_ROW_H = 90
+FORM_ROW_H = 125
 MEMBERS_HEADER_H = 40
 ROSTER_ROW_H = 26
 HISTORY_ROW_H = 26
