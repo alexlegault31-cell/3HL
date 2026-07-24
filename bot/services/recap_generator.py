@@ -82,14 +82,20 @@ FALLBACK_TEMPLATES = [
 def _fallback_recap(ctx: RecapContext) -> str:
     winner, loser, wscore, lscore = _winner_loser(ctx)
     winner_ts = ctx.home_team_season if winner.id == ctx.home_team.id else ctx.away_team_season
+    loser_ts = ctx.away_team_season if winner.id == ctx.home_team.id else ctx.home_team_season
     record = f"{winner_ts.wins}-{winner_ts.losses}-{winner_ts.ot_losses}"
+    loser_record = f"{loser_ts.wins}-{loser_ts.losses}-{loser_ts.ot_losses}"
     rank = ctx.standings_rank_home if winner.id == ctx.home_team.id else ctx.standings_rank_away
+    loser_rank = ctx.standings_rank_away if winner.id == ctx.home_team.id else ctx.standings_rank_home
 
     headline = random.choice(FALLBACK_TEMPLATES).format(winner=winner.name, loser=loser.name, wscore=wscore, lscore=lscore)
     lines = [headline]
     if ctx.top_performers:
-        lines.append(ctx.top_performers[0])
-    lines.append(f"{winner.name} improves to {record} and sits #{rank} in the standings.")
+        lines.append(" ".join(ctx.top_performers))
+    lines.append(
+        f"{winner.name} improves to {record} and sits #{rank} in the standings, "
+        f"while {loser.name} falls to {loser_record} (#{loser_rank})."
+    )
     return "\n".join(lines)
 
 
@@ -103,16 +109,23 @@ async def generate_recap(ctx: RecapContext) -> str:
     rank = ctx.standings_rank_home if winner.id == ctx.home_team.id else ctx.standings_rank_away
 
     style = random.choice(STYLE_VARIANTS)
+    loser_ts = ctx.away_team_season if winner.id == ctx.home_team.id else ctx.home_team_season
+    loser_record = f"{loser_ts.wins}-{loser_ts.losses}-{loser_ts.ot_losses}"
+    loser_rank = ctx.standings_rank_away if winner.id == ctx.home_team.id else ctx.standings_rank_home
+
     prompt = (
-        "Write a tight 3-4 sentence hockey game recap for a fan Discord channel. "
+        "Write a full, detailed hockey game recap for a fan Discord channel -- "
+        "2-3 solid paragraphs, not a quick blurb. "
         f"{style} No emojis, no hashtags. "
         f"{winner.name} beat {loser.name} {wscore}-{lscore}"
         f"{' in overtime' if ctx.game.went_to_overtime else ''}"
         f"{' in a shootout' if ctx.game.went_to_shootout else ''}. "
-        f"{winner.name} is now {record} and ranked #{rank} in the standings. "
-        "Top performers: " + "; ".join(ctx.top_performers[:3]) + ". "
-        "Mention the standout performer by name and weave the team's updated record/rank into "
-        "the final sentence. Do not invent stats not given above."
+        f"{winner.name} is now {record} and ranked #{rank} in the standings; "
+        f"{loser.name} falls to {loser_record}, ranked #{loser_rank}. "
+        "Every notable performance from the game: " + " ".join(ctx.top_performers) + " "
+        "Cover the flow of the game, call out every performer listed above by name with their "
+        "specific stats, and close by weaving in both teams' updated records/ranks. "
+        "Do not invent stats, plays, or players not given above."
     )
 
     try:
@@ -120,10 +133,10 @@ async def generate_recap(ctx: RecapContext) -> str:
         resp = await client.chat.completions.create(
             model=settings.openai_model,
             messages=[
-                {"role": "system", "content": "You are a concise hockey beat reporter for an online amateur league. Vary your sentence structure and opening line each time -- never start two recaps the same way."},
+                {"role": "system", "content": "You are a hockey beat reporter for an online amateur league, writing full recap articles, not short blurbs. Vary your sentence structure and opening line each time -- never start two recaps the same way."},
                 {"role": "user", "content": prompt},
             ],
-            max_tokens=220,
+            max_tokens=550,
             temperature=1.0,
         )
         text = resp.choices[0].message.content
@@ -139,7 +152,7 @@ def format_top_performers(player_lines: list[tuple[Player, PlayerGameStat]], goa
     fallback template's headline stat."""
     out: list[str] = []
     skaters = sorted(player_lines, key=lambda pl: (pl[1].points, pl[1].goals), reverse=True)
-    for player, line in skaters[:3]:
+    for player, line in skaters[:5]:
         bits = []
         if line.goals:
             bits.append(f"scored {line.goals}" if line.goals == 1 else f"scored {line.goals} goals")
