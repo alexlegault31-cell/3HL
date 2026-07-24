@@ -93,16 +93,23 @@ async def import_game(
     home_ts = await _get_team_season(session, schedule.home_team_id, season_id)
     away_ts = await _get_team_season(session, schedule.away_team_id, season_id)
 
+    # Fetch these explicitly rather than accessing schedule.home_team /
+    # schedule.away_team (lazy relationship access), which crashes with
+    # MissingGreenlet outside of specific contexts SQLAlchemy's asyncio
+    # extension supports for implicit lazy loading.
+    home_team_obj = await session.get(Team, schedule.home_team_id)
+    away_team_obj = await session.get(Team, schedule.away_team_id)
+
     if not home_ts.club_id:
-        raise ImportError_(f"{schedule.home_team.name} has no linked Club ID. Run `/league club swap` first.")
+        raise ImportError_(f"{home_team_obj.name} has no linked Club ID. Run `/league club swap` first.")
     if not away_ts.club_id:
-        raise ImportError_(f"{schedule.away_team.name} has no linked Club ID. Run `/league club swap` first.")
+        raise ImportError_(f"{away_team_obj.name} has no linked Club ID. Run `/league club swap` first.")
 
     match_detail = await _find_matching_match(client, home_ts.club_id, away_ts.club_id)
     if match_detail is None:
         raise ImportError_(
-            f"Couldn't find a recent EASHL match between {schedule.home_team.name} "
-            f"(Club {home_ts.club_id}) and {schedule.away_team.name} (Club {away_ts.club_id}). "
+            f"Couldn't find a recent EASHL match between {home_team_obj.name} "
+            f"(Club {home_ts.club_id}) and {away_team_obj.name} (Club {away_ts.club_id}). "
             f"Make sure the game has been played and try again in a few minutes."
         )
 
