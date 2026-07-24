@@ -106,6 +106,8 @@ class PlayerSeason(Base, IDMixin, TimestampMixin):
     goals_against: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     shutouts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     minutes_played: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    poke_checks: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    desperation_saves: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
     player: Mapped["Player"] = relationship()
     season: Mapped["Season"] = relationship()
