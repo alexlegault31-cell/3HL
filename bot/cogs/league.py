@@ -885,14 +885,18 @@ class LeagueCog(commands.Cog):
                 await interaction.response.send_message(embed=error_embed("Couldn't generate bracket", str(e)), ephemeral=True)
                 return
 
+            first_round = [s for s in created if s.round_order == 1]
+            future_round_count = len(created) - len(first_round)
             lines = []
-            for series in created:
+            for series in first_round:
                 team_a = await session.get(Team, series.team_a_id)
                 team_b = await session.get(Team, series.team_b_id)
                 lines.append(f"({series.seed_a}) {team_a.name} vs ({series.seed_b}) {team_b.name}")
+            if future_round_count:
+                lines.append(f"\n+ {future_round_count} more series created for later rounds (shown as TBD until determined).")
 
         await interaction.response.send_message(
-            embed=success_embed(f"{created[0].round_name} bracket generated", "\n".join(lines) + f"\n\nBest of {best_of}. Enter games with `/league admin submit-game` as usual.")
+            embed=success_embed(f"{first_round[0].round_name} bracket generated", "\n".join(lines) + f"\n\nBest of {best_of}. Enter games with `/league admin submit-game` as usual.")
         )
 
     @admin_group.command(name="advance-round", description="Advance to the next playoff round once all series in the current round are decided")
@@ -918,7 +922,7 @@ class LeagueCog(commands.Cog):
                 team_b = await session.get(Team, series.team_b_id)
                 lines.append(f"{team_a.name} vs {team_b.name}")
 
-        await interaction.response.send_message(embed=success_embed(f"{created[0].round_name} generated", "\n".join(lines)))
+        await interaction.response.send_message(embed=success_embed(f"{created[0].round_name} confirmed", "\n".join(lines)))
 
     @admin_group.command(name="generate-schedule", description="Auto-generate a full round-robin schedule for the league")
     @app_commands.describe(
