@@ -37,6 +37,7 @@ from bot.models import (
     User,
 )
 from bot.models.schedule import ScheduleStatus
+from bot.services.game_log_service import get_goalie_game_log, get_skater_game_log, get_team_recent_results
 from bot.services.leaders_service import (
     assists_leaders,
     blocked_shots_leaders,
@@ -278,7 +279,8 @@ class LeagueCog(commands.Cog):
 
             league_logo_url = await get_league_logo_url(session, interaction.guild_id)
             background_url = await get_league_background_url(session, interaction.guild_id)
-            path = await render_team_card(team, ts, s.name, lines, league_logo_url, background_url)
+            recent_results = await get_team_recent_results(session, team.id, s.id, limit=5)
+            path = await render_team_card(team, ts, s.name, lines, league_logo_url, background_url, recent_results)
         await interaction.followup.send(file=discord.File(path))
 
     # ==================================================================
@@ -435,9 +437,14 @@ class LeagueCog(commands.Cog):
             else:
                 team = await session.get(Team, ps.team_id) if ps.team_id else None
 
+            if player.is_goalie:
+                game_log = await get_goalie_game_log(session, player.id, s.id)
+            else:
+                game_log = await get_skater_game_log(session, player.id, s.id)
+
             league_logo_url = await get_league_logo_url(session, interaction.guild_id)
             background_url = await get_league_background_url(session, interaction.guild_id)
-            path = await render_player_card(player, ps, team, s.name, league_logo_url, background_url)
+            path = await render_player_card(player, ps, team, s.name, league_logo_url, background_url, game_log)
 
         await interaction.followup.send(file=discord.File(path))
 
