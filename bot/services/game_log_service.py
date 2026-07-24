@@ -20,13 +20,26 @@ class SkaterGameLogRow:
     assists: int
     points: int
     plus_minus: int
+    minutes_played: float  # TOI
+    time_with_puck: float  # TwP
     shots: int
+    pass_attempts: int
+    passes_completed: int
+    faceoffs_won: int
+    faceoffs_lost: int
     hits: int
-    pim: int
     takeaways: int
-    interceptions: int
+    giveaways: int
     blocked_shots: int
+    interceptions: int
+    pim: int
     played_at: object
+
+    @property
+    def pass_pct(self) -> float:
+        if self.pass_attempts <= 0:
+            return 0.0
+        return self.passes_completed / self.pass_attempts
 
 
 @dataclass
@@ -39,7 +52,15 @@ class GoalieGameLogRow:
     goals_against: int
     minutes_played: float
     shutout: bool
+    poke_checks: int
+    desperation_saves: int
     played_at: object
+
+    @property
+    def save_pct(self) -> float:
+        if self.shots_against <= 0:
+            return 0.0
+        return self.saves / self.shots_against
 
 
 async def get_skater_game_log(session: AsyncSession, player_id: int, season_id: int, limit: int = 20) -> list[SkaterGameLogRow]:
@@ -66,12 +87,19 @@ async def get_skater_game_log(session: AsyncSession, player_id: int, season_id: 
                 assists=line.assists,
                 points=line.points,
                 plus_minus=line.plus_minus,
+                minutes_played=line.minutes_played,
+                time_with_puck=line.time_with_puck,
                 shots=line.shots,
+                pass_attempts=line.pass_attempts,
+                passes_completed=line.passes_completed,
+                faceoffs_won=line.faceoffs_won,
+                faceoffs_lost=line.faceoffs_lost,
                 hits=line.hits,
-                pim=line.pim,
                 takeaways=line.takeaways,
-                interceptions=line.interceptions,
+                giveaways=line.giveaways,
                 blocked_shots=line.blocked_shots,
+                interceptions=line.interceptions,
+                pim=line.pim,
                 played_at=game.played_at,
             )
         )
@@ -104,6 +132,8 @@ async def get_goalie_game_log(session: AsyncSession, player_id: int, season_id: 
                 goals_against=line.goals_against,
                 minutes_played=line.minutes_played,
                 shutout=line.shutout,
+                poke_checks=getattr(line, "poke_checks", 0),
+                desperation_saves=getattr(line, "desperation_saves", 0),
                 played_at=game.played_at,
             )
         )
