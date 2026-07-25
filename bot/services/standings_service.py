@@ -1,4 +1,3 @@
-
 """
 Recomputes the materialized `StandingsEntry` table for a season from the
 live `TeamSeason` rows. Called after every import/delete/forfeit so reads
@@ -11,12 +10,16 @@ from __future__ import annotations
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from bot.models import StandingsEntry, TeamSeason
+from bot.models import StandingsEntry, Team, TeamSeason
 
 
 async def recompute_standings(session: AsyncSession, season_id: int) -> list[StandingsEntry]:
     team_seasons = (
-        await session.execute(select(TeamSeason).where(TeamSeason.season_id == season_id))
+        await session.execute(
+            select(TeamSeason)
+            .join(Team, Team.id == TeamSeason.team_id)
+            .where(TeamSeason.season_id == season_id, Team.is_active.is_(True))
+        )
     ).scalars().all()
 
     ranked = sorted(
@@ -47,4 +50,3 @@ async def recompute_standings(session: AsyncSession, season_id: int) -> list[Sta
 
     await session.flush()
     return entries
-
