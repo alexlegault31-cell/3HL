@@ -49,9 +49,9 @@ async def render_standings(
     draw.text((40, 28), "LEAGUE STANDINGS", font=title_font, fill=(255, 255, 255))
     draw.text((40, 82), season_label, font=sub_font, fill=(200, 210, 230))
 
-    league_logo = await get_team_logo(league_logo_url, (80, 80))
+    league_logo = await get_team_logo(league_logo_url, (96, 96))
     if league_logo is not None:
-        img.paste(league_logo, (WIDTH - 40 - 80, 25), league_logo.split()[-1])
+        img.paste(league_logo, (WIDTH - 40 - 96, 18), league_logo.split()[-1])
 
     header_y = HEADER_H + 14
     for key, label in [
