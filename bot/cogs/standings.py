@@ -11,6 +11,7 @@ from bot.graphics.standings_graphic import render_standings
 from bot.models import StandingsEntry, Team
 from bot.services.league_settings import get_league_background_url, get_league_logo_url
 from bot.services.season_service import SeasonNotFound, resolve_season
+from bot.services.standings_service import recompute_standings
 from bot.utils.embeds import error_embed, info_embed
 
 
@@ -32,7 +33,14 @@ class StandingsCog(commands.Cog):
             stmt = select(StandingsEntry).where(StandingsEntry.season_id == s.id).order_by(StandingsEntry.rank)
             entries = (await session.execute(stmt)).scalars().all()
             if not entries:
-                await interaction.followup.send(embed=info_embed("No standings yet", f"No games have been played in {s.name}."))
+                # No games played yet -- bootstrap standings directly from
+                # TeamSeason (every team already linked via /league club
+                # swap) so the board still shows every team at 0-0-0-0
+                # instead of refusing to display anything.
+                await recompute_standings(session, s.id)
+                entries = (await session.execute(stmt)).scalars().all()
+            if not entries:
+                await interaction.followup.send(embed=info_embed("No teams yet", f"No clubs have been added to {s.name} yet."))
                 return
 
             rows = [(e, await session.get(Team, e.team_id)) for e in entries]
