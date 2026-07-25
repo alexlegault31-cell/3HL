@@ -12,7 +12,7 @@ CELL_W = 400
 CELL_H = 230
 ROWS_SHOWN = 5
 PADDING = 40
-BANNER_H = 90
+BANNER_H = 100
 
 
 async def render_combined_leaders_board(
@@ -37,9 +37,9 @@ async def render_combined_leaders_board(
     draw.text((PADDING, 20), "STAT LEADERS", font=title_font, fill=(255, 255, 255))
     draw.text((PADDING, 62), season_label, font=sub_font, fill=(210, 216, 230))
 
-    league_logo = await get_team_logo(league_logo_url, (64, 64))
+    league_logo = await get_team_logo(league_logo_url, (80, 80))
     if league_logo is not None:
-        img.paste(league_logo, (width - PADDING - 64, 14), league_logo.split()[-1])
+        img.paste(league_logo, (width - PADDING - 80, 12), league_logo.split()[-1])
 
     grid_top = PADDING + BANNER_H
 
@@ -56,7 +56,7 @@ async def render_combined_leaders_board(
             outline=accent_color,
             width=1,
         )
-        draw.text((cell_x + 16, cell_y + 12), title.upper(), font=cat_font, fill=Theme.TEXT_MUTED)
+        draw.text((cell_x + 16, cell_y + 12), title.upper(), font=cat_font, fill=Theme.TEXT_PRIMARY)
 
         if not rows:
             draw.text((cell_x + 16, cell_y + 50), "No data yet", font=row_font, fill=Theme.TEXT_MUTED)
@@ -65,12 +65,19 @@ async def render_combined_leaders_board(
         line_y = cell_y + 48
         for r in rows[:ROWS_SHOWN]:
             name = r.player.gamertag
-            max_name_width = CELL_W - 20 - 32 - 70
+            name_x = cell_x + 40
+            if r.team is not None:
+                logo = await get_team_logo(r.team.logo_url, (20, 20))
+                if logo is not None:
+                    img.paste(logo, (name_x, line_y - 1), logo.split()[-1])
+            name_x += 24  # reserved whether or not this row actually has a logo, so every name lines up
+
+            max_name_width = CELL_W - 20 - (name_x - cell_x) - 70
             display_name = _truncate_to_fit(draw, name, row_font, max_name_width)
 
             rank_color = Theme.GOLD if r.rank == 1 else (Theme.SILVER if r.rank == 2 else (Theme.BRONZE if r.rank == 3 else Theme.TEXT_MUTED))
             draw.text((cell_x + 16, line_y), str(r.rank), font=row_font, fill=rank_color)
-            draw.text((cell_x + 40, line_y), display_name, font=row_font, fill=Theme.TEXT_PRIMARY)
+            draw.text((name_x, line_y), display_name, font=row_font, fill=Theme.TEXT_PRIMARY)
 
             val_str = str(r.value) if isinstance(r.value, int) else f"{r.value:.3f}".lstrip("0") if r.value < 1 else f"{r.value:.2f}"
             val_w = draw.textlength(val_str, font=val_font)
