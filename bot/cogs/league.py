@@ -48,6 +48,7 @@ from bot.models.schedule import ScheduleStatus
 from bot.services.game_log_service import get_goalie_game_log, get_skater_game_log, get_team_recent_results
 from bot.services.roster_service import get_team_roster
 from bot.services.unlinked_players_service import find_unlinked_players_in_game
+from bot.ui.schedule_view import ScheduleButtonView
 from bot.services.leaders_service import (
     assists_leaders,
     blocked_shots_leaders,
@@ -1265,6 +1266,12 @@ class LeagueCog(commands.Cog):
     # ==================================================================
     # /league schedule
     # ==================================================================
+
+    @schedule_group.command(name="post-button", description="Post a 'My Schedule' button in this channel")
+    @commissioner_only()
+    async def schedule_post_button(self, interaction: discord.Interaction):
+        view = ScheduleButtonView()
+        await interaction.response.send_message("Click below and I'll send you your own team's schedule.", view=view)
 
     @schedule_group.command(name="add", description="Schedule a match")
     @app_commands.describe(
