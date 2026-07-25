@@ -248,10 +248,11 @@ class LeagueCog(commands.Cog):
     @app_commands.autocomplete(name=team_name_autocomplete)
     @commissioner_only()
     async def club_remove(self, interaction: discord.Interaction, name: str):
+        await interaction.response.defer(ephemeral=True)
         async with get_session() as session:
             team = await session.scalar(select(Team).where(Team.name.ilike(name)))
             if not team:
-                await interaction.response.send_message(embed=error_embed("Unknown club", f"No club named **{name}**."), ephemeral=True)
+                await interaction.followup.send(embed=error_embed("Unknown club", f"No club named **{name}**."))
                 return
             team.is_active = False
             try:
@@ -260,22 +261,23 @@ class LeagueCog(commands.Cog):
                 await refresh_all_channels(interaction.client, session)
             except SeasonNotFound:
                 pass  # no active season -- nothing to refresh
-        await interaction.response.send_message(embed=success_embed("Club removed", f"**{name}** has been deactivated. Historical stats/games are preserved."))
+        await interaction.followup.send(embed=success_embed("Club removed", f"**{name}** has been deactivated. Historical stats/games are preserved."))
 
     @club_group.command(name="swap", description="Change a club's linked EASHL Club ID")
     @app_commands.describe(name="Club name", new_club_id="New EASHL Club ID", season="Season number (defaults to active)")
     @app_commands.autocomplete(name=team_name_autocomplete)
     @commissioner_only()
     async def club_swap(self, interaction: discord.Interaction, name: str, new_club_id: int, season: int | None = None):
+        await interaction.response.defer()
         async with get_session() as session:
             team = await session.scalar(select(Team).where(Team.name.ilike(name)))
             if not team:
-                await interaction.response.send_message(embed=error_embed("Unknown club", f"No club named **{name}**."), ephemeral=True)
+                await interaction.followup.send(embed=error_embed("Unknown club", f"No club named **{name}**."))
                 return
             try:
                 s = await resolve_season(session, season)
             except SeasonNotFound as e:
-                await interaction.response.send_message(embed=error_embed("Season error", str(e)), ephemeral=True)
+                await interaction.followup.send(embed=error_embed("Season error", str(e)))
                 return
             ts = await session.scalar(select(TeamSeason).where(TeamSeason.team_id == team.id, TeamSeason.season_id == s.id))
             if ts is None:
@@ -285,7 +287,7 @@ class LeagueCog(commands.Cog):
             ts.club_id = new_club_id
             await recompute_standings(session, s.id)
             await refresh_all_channels(interaction.client, session)
-        await interaction.response.send_message(
+        await interaction.followup.send(
             embed=success_embed("Club ID updated", f"**{name}** Club ID changed from `{old_id or '—'}` to `{new_club_id}` for {s.name}.")
         )
 
@@ -858,21 +860,22 @@ class LeagueCog(commands.Cog):
         game_number: int | None = None,
         season: int | None = None,
     ):
+        await interaction.response.defer()
         async with get_session() as session:
             try:
                 s = await resolve_season(session, season)
             except SeasonNotFound as e:
-                await interaction.response.send_message(embed=error_embed("Season error", str(e)), ephemeral=True)
+                await interaction.followup.send(embed=error_embed("Season error", str(e)))
                 return
             win_team = await session.scalar(select(Team).where(Team.name.ilike(winning_team)))
             lose_team = await session.scalar(select(Team).where(Team.name.ilike(losing_team)))
             if not win_team or not lose_team:
-                await interaction.response.send_message(embed=error_embed("Unknown club", "Both clubs must exist."), ephemeral=True)
+                await interaction.followup.send(embed=error_embed("Unknown club", "Both clubs must exist."))
                 return
             try:
                 win_score, lose_score = (int(x) for x in score.replace(" ", "").split("-"))
             except ValueError:
-                await interaction.response.send_message(embed=error_embed("Bad score format", "Use the format `1-0`."), ephemeral=True)
+                await interaction.followup.send(embed=error_embed("Bad score format", "Use the format `1-0`."))
                 return
 
             schedule = None
@@ -949,7 +952,7 @@ class LeagueCog(commands.Cog):
             embed.add_field(name="Playoff Series", value=series_status_text, inline=False)
         elif is_playoff_game:
             embed.add_field(name="Note", value="This was tagged as a playoff game, but no series was found to update.", inline=False)
-        await interaction.response.send_message(embed=embed, file=discord.File(graphic_path))
+        await interaction.followup.send(embed=embed, file=discord.File(graphic_path))
         await self._post_to_results_channel(interaction, embed, graphic_path)
 
     @admin_group.command(name="delete-game", description="Delete an imported game and reverse all stats")
