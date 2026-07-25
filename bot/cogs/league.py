@@ -50,6 +50,7 @@ from bot.services.roster_service import get_team_roster
 from bot.services.unlinked_players_service import find_unlinked_players_in_game
 from bot.ui.schedule_view import ScheduleButtonView
 from bot.services.leaders_service import (
+    LeaderRow,
     assists_leaders,
     blocked_shots_leaders,
     faceoff_pct_leaders,
@@ -1200,6 +1201,20 @@ class LeagueCog(commands.Cog):
                 ("Save %", await goalie_leaders(session, s.id, limit=5)),
                 ("Shutouts", await shutouts_leaders(session, s.id, limit=5)),
             ]
+
+            if not any(rows for _, rows in categories):
+                # No games played yet -- rather than showing every box
+                # empty, list whoever's already linked their account with
+                # /league player link, all at 0, so their names are at
+                # least visible before the season starts.
+                linked_players = (
+                    await session.execute(select(Player).join(User, User.player_id == Player.id).limit(5))
+                ).scalars().all()
+                if linked_players:
+                    fallback_rows = [
+                        LeaderRow(rank=i + 1, player=p, team=None, value=0, secondary="") for i, p in enumerate(linked_players)
+                    ]
+                    categories = [(name, fallback_rows) for name, _ in categories]
 
             league_logo_url = await get_league_logo_url(session, interaction.guild_id)
             background_url = await get_league_background_url(session, interaction.guild_id)
