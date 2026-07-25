@@ -56,9 +56,40 @@ async def _download_and_cache(url: str) -> Optional[Path]:
         return None
 
 
+def _fit_within(img: Image.Image, size: tuple[int, int]) -> Image.Image:
+    """Scales img preserving aspect ratio so it fits entirely within
+    `size` without distortion, then centers it on a transparent canvas of
+    exactly `size`. Without this, a hard resize to a fixed box stretches
+    non-square logos and makes ones with more built-in padding look
+    smaller than ones that fill their own source canvas edge-to-edge --
+    this makes every logo occupy the same visual footprint regardless of
+    its original shape or padding.
+
+    Trims transparent padding around the actual artwork FIRST -- two
+    logos that are visually the same size but were exported with
+    different amounts of built-in margin would otherwise still render at
+    different sizes even with aspect-preserving scaling."""
+    bbox = img.split()[-1].getbbox()  # alpha channel only -- avoids being thrown off by leftover RGB color data under fully-transparent pixels
+    if bbox is not None:
+        img = img.crop(bbox)
+
+    target_w, target_h = size
+    src_w, src_h = img.size
+    if src_w <= 0 or src_h <= 0:
+        return Image.new("RGBA", size, (0, 0, 0, 0))
+    scale = min(target_w / src_w, target_h / src_h)
+    new_w, new_h = max(1, round(src_w * scale)), max(1, round(src_h * scale))
+    resized = img.resize((new_w, new_h), Image.LANCZOS)
+
+    canvas = Image.new("RGBA", size, (0, 0, 0, 0))
+    canvas.paste(resized, ((target_w - new_w) // 2, (target_h - new_h) // 2), resized)
+    return canvas
+
+
 async def get_team_logo(logo_url: Optional[str], size: tuple[int, int]) -> Optional[Image.Image]:
-    """Returns a resized RGBA image for a team/league logo, or None on any
-    failure. Callers should always have a colored-shape fallback ready."""
+    """Returns a logo fit within `size` (aspect ratio preserved, centered),
+    or None on any failure. Callers should always have a colored-shape
+    fallback ready."""
     if not logo_url:
         return None
     cache_path = await _download_and_cache(logo_url)
@@ -66,7 +97,7 @@ async def get_team_logo(logo_url: Optional[str], size: tuple[int, int]) -> Optio
         return None
     try:
         img = Image.open(cache_path).convert("RGBA")
-        return img.resize(size, Image.LANCZOS)
+        return _fit_within(img, size)
     except Exception:
         log.warning("Failed to load cached logo %s", cache_path, exc_info=True)
         return None
