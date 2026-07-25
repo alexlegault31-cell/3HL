@@ -32,13 +32,12 @@ class StandingsCog(commands.Cog):
 
             stmt = select(StandingsEntry).where(StandingsEntry.season_id == s.id).order_by(StandingsEntry.rank)
             entries = (await session.execute(stmt)).scalars().all()
-            if not entries:
-                # No games played yet -- bootstrap standings directly from
-                # TeamSeason (every team already linked via /league club
-                # swap) so the board still shows every team at 0-0-0-0
-                # instead of refusing to display anything.
-                await recompute_standings(session, s.id)
-                entries = (await session.execute(stmt)).scalars().all()
+            # Always recompute fresh before displaying -- not just when
+            # empty. Mid-season roster changes (a team removed, a new one
+            # added and swapped in) need to be reflected every time this
+            # is viewed, not just once at the very start of the season.
+            await recompute_standings(session, s.id)
+            entries = (await session.execute(stmt)).scalars().all()
             if not entries:
                 await interaction.followup.send(embed=info_embed("No teams yet", f"No clubs have been added to {s.name} yet."))
                 return
