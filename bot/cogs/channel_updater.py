@@ -15,8 +15,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from bot.config import settings
 from bot.graphics.combined_leaders_board import render_combined_leaders_board
 from bot.graphics.standings_graphic import render_standings
-from bot.models import GuildSetting, StandingsEntry, Team
+from bot.models import GuildSetting, Player, StandingsEntry, Team, User
 from bot.services.leaders_service import (
+    LeaderRow,
     assists_leaders,
     blocked_shots_leaders,
     faceoff_pct_leaders,
@@ -84,7 +85,11 @@ async def refresh_leaders_channel(bot: commands.Bot, session: AsyncSession) -> N
         ("Shutouts", await shutouts_leaders(session, season.id, limit=5)),
     ]
     if not any(rows for _, rows in categories):
-        return
+        linked_players = (await session.execute(select(Player).join(User, User.player_id == Player.id).limit(5))).scalars().all()
+        if not linked_players:
+            return
+        fallback_rows = [LeaderRow(rank=i + 1, player=p, team=None, value=0, secondary="") for i, p in enumerate(linked_players)]
+        categories = [(name, fallback_rows) for name, _ in categories]
 
     channel = bot.get_channel(settings.channel_stat_leaders)
     league_logo_url = await get_league_logo_url(session, channel.guild.id) if channel else None
