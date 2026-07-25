@@ -68,7 +68,7 @@ from bot.services.league_settings import get_league_background_url, get_league_l
 from bot.services.playoff_service import PlayoffError, advance_round, generate_bracket, get_bracket, record_series_result
 from bot.services.recap_generator import RecapContext, format_top_performers, generate_recap
 from bot.services.schedule_generator import generate_round_robin
-from bot.services.season_service import SeasonNotFound, resolve_season, set_active_season
+from bot.services.season_service import SeasonNotFound, get_active_season, resolve_season, set_active_season
 from bot.services.stat_importer import ImportError_, apply_team_season_delta, find_pending_schedule_for_matchup, import_game, reverse_game
 from bot.services.standings_service import recompute_standings
 from bot.utils.checks import commissioner_only, gm_only
@@ -254,6 +254,12 @@ class LeagueCog(commands.Cog):
                 await interaction.response.send_message(embed=error_embed("Unknown club", f"No club named **{name}**."), ephemeral=True)
                 return
             team.is_active = False
+            try:
+                s = await get_active_season(session)
+                await recompute_standings(session, s.id)
+                await refresh_all_channels(interaction.client, session)
+            except SeasonNotFound:
+                pass  # no active season -- nothing to refresh
         await interaction.response.send_message(embed=success_embed("Club removed", f"**{name}** has been deactivated. Historical stats/games are preserved."))
 
     @club_group.command(name="swap", description="Change a club's linked EASHL Club ID")
@@ -277,6 +283,8 @@ class LeagueCog(commands.Cog):
                 session.add(ts)
             old_id = ts.club_id
             ts.club_id = new_club_id
+            await recompute_standings(session, s.id)
+            await refresh_all_channels(interaction.client, session)
         await interaction.response.send_message(
             embed=success_embed("Club ID updated", f"**{name}** Club ID changed from `{old_id or '—'}` to `{new_club_id}` for {s.name}.")
         )
