@@ -536,7 +536,7 @@ class LeagueCog(commands.Cog):
 
             existing_user = await session.scalar(select(User).where(User.discord_id == interaction.user.id))
             if existing_user is None:
-                session.add(User(discord_id=interaction.user.id, player_id=player.id))
+                session.add(User(discord_id=interaction.user.id, discord_username=str(interaction.user), player_id=player.id))
             else:
                 existing_user.player_id = player.id
 
@@ -948,20 +948,21 @@ class LeagueCog(commands.Cog):
     @app_commands.describe(game_number="The schedule game number to undo")
     @commissioner_only()
     async def admin_delete_game(self, interaction: discord.Interaction, game_number: int, season: int | None = None):
+        await interaction.response.defer()
         async with get_session() as session:
             try:
                 s = await resolve_season(session, season)
             except SeasonNotFound as e:
-                await interaction.response.send_message(embed=error_embed("Season error", str(e)), ephemeral=True)
+                await interaction.followup.send(embed=error_embed("Season error", str(e)))
                 return
             schedule = await session.scalar(select(ScheduleGame).where(ScheduleGame.season_id == s.id, ScheduleGame.game_number == game_number))
             if not schedule or not schedule.game_id:
-                await interaction.response.send_message(embed=error_embed("Nothing to delete", f"Game #{game_number} has no imported result."), ephemeral=True)
+                await interaction.followup.send(embed=error_embed("Nothing to delete", f"Game #{game_number} has no imported result."))
                 return
             game = await session.get(Game, schedule.game_id)
             await reverse_game(session, game)
             await refresh_all_channels(interaction.client, session)
-        await interaction.response.send_message(embed=success_embed("Game deleted", f"Game #{game_number} was removed and all stats/standings reversed."))
+        await interaction.followup.send(embed=success_embed("Game deleted", f"Game #{game_number} was removed and all stats/standings reversed."))
 
     @admin_group.command(name="generate-playoffs", description="Seed a single-elimination playoff bracket from the current standings")
     @app_commands.describe(
