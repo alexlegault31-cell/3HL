@@ -778,6 +778,58 @@ class LeagueCog(commands.Cog):
             embed.add_field(name="⚠️ Unlinked Players Found", value=lines, inline=False)
         await interaction.followup.send(embed=embed, files=[discord.File(graphic_path), discord.File(recap_graphic_path)])
 
+    @admin_group.command(name="set-record", description="Manually set a team's W-L-OTL-Points (for joining a league mid-season) -- touches nothing else")
+    @app_commands.describe(
+        name="Club name",
+        wins="Wins",
+        losses="Losses",
+        ot_losses="OT losses",
+        points="Points",
+    )
+    @app_commands.autocomplete(name=team_name_autocomplete)
+    @commissioner_only()
+    async def admin_set_record(
+        self,
+        interaction: discord.Interaction,
+        name: str,
+        wins: int,
+        losses: int,
+        ot_losses: int,
+        points: int,
+        season: int | None = None,
+    ):
+        async with get_session() as session:
+            try:
+                s = await resolve_season(session, season)
+            except SeasonNotFound as e:
+                await interaction.response.send_message(embed=error_embed("Season error", str(e)), ephemeral=True)
+                return
+
+            team = await session.scalar(select(Team).where(Team.name.ilike(name)))
+            if not team:
+                await interaction.response.send_message(embed=error_embed("Unknown club", f"No club named **{name}**."), ephemeral=True)
+                return
+
+            ts = await session.scalar(select(TeamSeason).where(TeamSeason.team_id == team.id, TeamSeason.season_id == s.id))
+            if ts is None:
+                ts = TeamSeason(team_id=team.id, season_id=s.id)
+                session.add(ts)
+                await session.flush()
+
+            # Sets ONLY the record -- deliberately leaves goals for/against,
+            # OT-win split, streak, last-10, and every player/game stat
+            # completely untouched.
+            ts.wins = wins
+            ts.losses = losses
+            ts.ot_losses = ot_losses
+            ts.points = points
+
+            await recompute_standings(session, s.id)
+
+        await interaction.response.send_message(
+            embed=success_embed("Record set", f"**{team.name}** is now {wins}-{losses}-{ot_losses}, {points} pts in {s.name}.")
+        )
+
     @admin_group.command(name="forfeit-game", description="Enforce a club forfeit on a match")
     @app_commands.describe(
         winning_team="Team that wins by forfeit",
