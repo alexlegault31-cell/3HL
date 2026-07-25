@@ -79,7 +79,10 @@ async def render_standings(
         draw.rectangle([(0, y - 8), (6, y + ROW_H - 12)], fill=team_color)
 
         rank_color = Theme.GOLD if entry.rank == 1 else (Theme.SILVER if entry.rank == 2 else (Theme.BRONZE if entry.rank == 3 else Theme.TEXT_PRIMARY))
-        draw.text((COL_X["rank"], y), str(entry.rank), font=rank_font, fill=rank_color)
+        rank_str = str(entry.rank)
+        rank_right_edge = COL_X["team"] - 46  # right-aligned so any digit count ends here, just before the logo
+        rank_w = draw.textlength(rank_str, font=rank_font)
+        draw.text((rank_right_edge - rank_w, y), rank_str, font=rank_font, fill=rank_color)
 
         logo = await get_team_logo(team.logo_url, (LOGO_SIZE, LOGO_SIZE))
         logo_x = COL_X["team"] - 44
