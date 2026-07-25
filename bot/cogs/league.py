@@ -1070,15 +1070,14 @@ class LeagueCog(commands.Cog):
                 )
                 return
 
-            # The league's fixed weekly time slots -- always these 4 days
-            # at these 3 times, cycled through in order for each week's
-            # games (fills each day's 3 times before moving to the next
-            # day, e.g. Tue 8:00 -> Tue 8:30 -> Tue 9:00 -> Wed 8:00 ...).
+            # The league's fixed weekly time slots -- always these 3 days
+            # at these 4 times, cycled through in order for each week's
+            # games (fills each day's 4 times before moving to the next
+            # day, e.g. Tue 8:00 -> Tue 8:30 -> Tue 9:00 -> Tue 9:30 -> Wed 8:00 ...).
             SLOT_SEQUENCE = [
-                ("Tuesday", "8:00 PM EST"), ("Tuesday", "8:30 PM EST"), ("Tuesday", "9:00 PM EST"),
-                ("Wednesday", "8:00 PM EST"), ("Wednesday", "8:30 PM EST"), ("Wednesday", "9:00 PM EST"),
-                ("Thursday", "8:00 PM EST"), ("Thursday", "8:30 PM EST"), ("Thursday", "9:00 PM EST"),
-                ("Friday", "8:00 PM EST"), ("Friday", "8:30 PM EST"), ("Friday", "9:00 PM EST"),
+                ("Tuesday", "8:00 PM EST"), ("Tuesday", "8:30 PM EST"), ("Tuesday", "9:00 PM EST"), ("Tuesday", "9:30 PM EST"),
+                ("Wednesday", "8:00 PM EST"), ("Wednesday", "8:30 PM EST"), ("Wednesday", "9:00 PM EST"), ("Wednesday", "9:30 PM EST"),
+                ("Thursday", "8:00 PM EST"), ("Thursday", "8:30 PM EST"), ("Thursday", "9:00 PM EST"), ("Thursday", "9:30 PM EST"),
             ]
 
             created_count = 0
