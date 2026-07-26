@@ -49,6 +49,7 @@ from bot.services.game_log_service import get_goalie_game_log, get_skater_game_l
 from bot.services.roster_service import get_team_roster
 from bot.services.unlinked_players_service import find_unlinked_players_in_game
 from bot.ui.schedule_view import ScheduleButtonView
+from bot.ui.season_picker_view import SeasonPickerView
 from bot.services.leaders_service import (
     LeaderRow,
     assists_leaders,
@@ -305,20 +306,47 @@ class LeagueCog(commands.Cog):
         await interaction.response.send_message(embed=success_embed("Logo updated", f"Logo set for **{name}**."))
 
     @club_group.command(name="stats", description="View a club's record for a season")
-    @app_commands.describe(name="Club name", season="Season number (defaults to active)")
+    @app_commands.describe(name="Club name", season="Season number (skips the season picker if given)")
     @app_commands.autocomplete(name=team_name_autocomplete)
     async def club_stats(self, interaction: discord.Interaction, name: str, season: int | None = None):
-        await interaction.response.defer()
         async with get_session() as session:
             team = await session.scalar(select(Team).where(Team.name.ilike(name)))
             if not team:
-                await interaction.followup.send(embed=error_embed("Unknown club", f"No club named **{name}**."))
+                await interaction.response.send_message(embed=error_embed("Unknown club", f"No club named **{name}**."), ephemeral=True)
                 return
-            try:
-                s = await resolve_season(session, season)
-            except SeasonNotFound as e:
-                await interaction.followup.send(embed=error_embed("Season error", str(e)))
+
+            if season is not None:
+                await interaction.response.defer()
+                try:
+                    s = await resolve_season(session, season)
+                except SeasonNotFound as e:
+                    await interaction.followup.send(embed=error_embed("Season error", str(e)))
+                    return
+                await self._send_club_stats_card(interaction, team.id, s.id, use_followup=True)
                 return
+
+            seasons = (await session.execute(select(Season).order_by(Season.number.desc()))).scalars().all()
+            if not seasons:
+                await interaction.response.send_message(embed=error_embed("No seasons", "No seasons have been created yet."), ephemeral=True)
+                return
+            if len(seasons) == 1:
+                await interaction.response.defer()
+                await self._send_club_stats_card(interaction, team.id, seasons[0].id, use_followup=True)
+                return
+
+            team_id = team.id
+
+            async def on_select(select_interaction: discord.Interaction, season_id: int) -> None:
+                await select_interaction.response.defer()
+                await self._send_club_stats_card(select_interaction, team_id, season_id, use_followup=True)
+
+            view = SeasonPickerView(seasons, on_select)
+            await interaction.response.send_message("Which season would you like to see?", view=view, ephemeral=True)
+
+    async def _send_club_stats_card(self, interaction: discord.Interaction, team_id: int, season_id: int, use_followup: bool) -> None:
+        async with get_session() as session:
+            team = await session.get(Team, team_id)
+            s = await session.get(Season, season_id)
 
             ts = await session.scalar(select(TeamSeason).where(TeamSeason.team_id == team.id, TeamSeason.season_id == s.id))
             if ts is None:
@@ -344,7 +372,9 @@ class LeagueCog(commands.Cog):
             recent_results = await get_team_recent_results(session, team.id, s.id, limit=15)
             skaters, goalies = await get_team_roster(session, team.id, s.id)
             path = await render_team_card(team, ts, s.name, lines, league_logo_url, background_url, recent_results, skaters, goalies)
-        await interaction.followup.send(file=discord.File(path))
+
+        send = interaction.followup.send if use_followup else interaction.response.send_message
+        await send(file=discord.File(path))
 
     # ==================================================================
     # /league player
@@ -354,7 +384,7 @@ class LeagueCog(commands.Cog):
     @app_commands.describe(
         discord_user="Pick a Discord member (uses their linked EA gamertag) -- defaults to you",
         gamertag="Or type an EA gamertag directly, if they haven't linked their account",
-        season="Season number (defaults to active)",
+        season="Season number (skips the season picker if given)",
     )
     async def player_stats(
         self,
@@ -363,23 +393,50 @@ class LeagueCog(commands.Cog):
         gamertag: str | None = None,
         season: int | None = None,
     ):
-        await interaction.response.defer()
         async with get_session() as session:
             player = await self._resolve_player(session, interaction, gamertag, discord_user)
             if player is None:
                 who = discord_user.mention if discord_user else "That account"
-                await interaction.followup.send(
+                await interaction.response.send_message(
                     embed=error_embed(
                         "No player found",
                         f"{who} hasn't linked an EA gamertag yet -- use `/league player link` first, or provide a gamertag directly.",
-                    )
+                    ),
+                    ephemeral=True,
                 )
                 return
-            try:
-                s = await resolve_season(session, season)
-            except SeasonNotFound as e:
-                await interaction.followup.send(embed=error_embed("Season error", str(e)))
+            player_id = player.id
+
+            if season is not None:
+                await interaction.response.defer()
+                try:
+                    s = await resolve_season(session, season)
+                except SeasonNotFound as e:
+                    await interaction.followup.send(embed=error_embed("Season error", str(e)))
+                    return
+                await self._send_player_stats_card(interaction, player_id, s.id, use_followup=True)
                 return
+
+            seasons = (await session.execute(select(Season).order_by(Season.number.desc()))).scalars().all()
+            if not seasons:
+                await interaction.response.send_message(embed=error_embed("No seasons", "No seasons have been created yet."), ephemeral=True)
+                return
+            if len(seasons) == 1:
+                await interaction.response.defer()
+                await self._send_player_stats_card(interaction, player_id, seasons[0].id, use_followup=True)
+                return
+
+            async def on_select(select_interaction: discord.Interaction, season_id: int) -> None:
+                await select_interaction.response.defer()
+                await self._send_player_stats_card(select_interaction, player_id, season_id, use_followup=True)
+
+            view = SeasonPickerView(seasons, on_select)
+            await interaction.response.send_message("Which season would you like to see?", view=view, ephemeral=True)
+
+    async def _send_player_stats_card(self, interaction: discord.Interaction, player_id: int, season_id: int, use_followup: bool) -> None:
+        async with get_session() as session:
+            player = await session.get(Player, player_id)
+            s = await session.get(Season, season_id)
 
             ps = await session.scalar(select(PlayerSeason).where(PlayerSeason.player_id == player.id, PlayerSeason.season_id == s.id))
             team = None
@@ -405,7 +462,8 @@ class LeagueCog(commands.Cog):
             background_url = await get_league_background_url(session, interaction.guild_id)
             path = await render_player_card(player, ps, team, s.name, league_logo_url, background_url, game_log)
 
-        await interaction.followup.send(file=discord.File(path))
+        send = interaction.followup.send if use_followup else interaction.response.send_message
+        await send(file=discord.File(path))
 
     @player_group.command(name="link", description="Link your Discord account to your EA gamertag")
     @app_commands.describe(gamertag="Your EA gamertag", confirm="Set true to confirm creating a brand-new player if a similar name already exists")
