@@ -30,7 +30,7 @@ def _fmt_toi(minutes) -> str:
     return f"{mins}:{secs:02d}"
 
 
-async def gather_export_data(session: AsyncSession) -> dict:
+async def gather_export_data(session: AsyncSession, guild_name: str | None = None, league_logo_url: str | None = None) -> dict:
     try:
         season = await get_active_season(session)
     except SeasonNotFound:
@@ -38,7 +38,10 @@ async def gather_export_data(session: AsyncSession) -> dict:
 
     teams = (await session.execute(select(Team).where(Team.is_active.is_(True)))).scalars().all()
     teams_json = [
-        {"id": t.id, "name": t.name, "abbr": (t.abbreviation or t.name[-3:]).upper(), "color": t.primary_color or "#58A6FF"}
+        {
+            "id": t.id, "name": t.name, "abbr": (t.abbreviation or t.name[-3:]).upper(),
+            "color": t.primary_color or "#58A6FF", "logoUrl": t.logo_url,
+        }
         for t in teams
     ]
 
@@ -191,6 +194,7 @@ async def gather_export_data(session: AsyncSession) -> dict:
 
     return {
         "season": {"name": season.name, "number": season.number},
+        "league": {"name": guild_name or season.name.split(" - ")[0].strip(), "logoUrl": league_logo_url},
         "teams": teams_json,
         "standings": standings_json,
         "schedule": schedule_json,
