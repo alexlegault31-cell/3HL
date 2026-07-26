@@ -8,7 +8,7 @@ import uuid
 
 from bot.graphics.logo_fetch import get_team_logo
 from bot.graphics.player_card import GL_COLS, GL_COLS_ORDER, GL_HEADERS, SK_COLS, SK_COLS_ORDER, SK_HEADERS, _fmt_toi
-from bot.graphics.theme import GENERATED_DIR, Theme, load_font, prepare_canvas
+from bot.graphics.theme import GENERATED_DIR, Theme, finalize_and_save, load_font, prepare_canvas
 from bot.models import Game, GoalieGameStat, Player, PlayerGameStat, Team, TeamGameStat
 
 WIDTH = 1080
@@ -213,5 +213,5 @@ async def render_game_recap(
     await draw_roster(y, away_team, away_skaters, away_goalies)
 
     out_path = GENERATED_DIR / f"recap_{uuid.uuid4().hex[:8]}.png"
-    img.save(out_path)
+    finalize_and_save(img, out_path)
     return str(out_path)
