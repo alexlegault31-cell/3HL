@@ -1489,9 +1489,18 @@ class LeagueCog(commands.Cog):
             background_url = await get_league_background_url(session, interaction.guild_id)
 
             title = "PENDING GAMES" if status == ScheduleStatus.SCHEDULED else (f"WEEK {week} SCHEDULE" if week is not None else "SCHEDULE")
-            path = await render_schedule(title, s.name, games, teams_by_id, league_logo_url, background_url)
+            paths = await render_schedule(title, s.name, games, teams_by_id, league_logo_url, background_url)
 
-        await interaction.followup.send(file=discord.File(path))
+        # render_schedule returns one image per "page" so a full season is
+        # never truncated -- Discord allows at most 10 file attachments per
+        # message, so split across multiple messages if there are more.
+        for i in range(0, len(paths), 10):
+            chunk = paths[i : i + 10]
+            files = [discord.File(p) for p in chunk]
+            if i == 0:
+                await interaction.followup.send(files=files)
+            else:
+                await interaction.channel.send(files=files)
 
     async def _generate_and_attach_recap(self, session, game: Game, home_team: Team, away_team: Team) -> str:
         from bot.models import GoalieGameStat, PlayerGameStat
