@@ -77,6 +77,8 @@ class ScheduleButtonView(discord.ui.View):
             league_logo_url = await get_league_logo_url(session, interaction.guild_id)
             background_url = await get_league_background_url(session, interaction.guild_id)
 
-            path = await render_schedule(f"{team.name.upper()} SCHEDULE", season.name, games, teams_by_id, league_logo_url, background_url)
+            paths = await render_schedule(f"{team.name.upper()} SCHEDULE", season.name, games, teams_by_id, league_logo_url, background_url)
 
-        await interaction.followup.send(file=discord.File(path), ephemeral=True)
+        for i in range(0, len(paths), 10):
+            chunk = paths[i : i + 10]
+            await interaction.followup.send(files=[discord.File(p) for p in chunk], ephemeral=True)
