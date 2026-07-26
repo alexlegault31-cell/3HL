@@ -1362,11 +1362,11 @@ class LeagueCog(commands.Cog):
         else:
             await interaction.response.send_message(embed=success_embed("Week 1 override cleared", "Week 1 will now use the regular weekly pattern like every other week."))
 
-    @schedule_group.command(name="post-button", description="Post a 'My Schedule' button in this channel")
+    @schedule_group.command(name="post-button", description="Post a 'Team Schedule' button in this channel")
     @commissioner_only()
     async def schedule_post_button(self, interaction: discord.Interaction):
         view = ScheduleButtonView()
-        await interaction.response.send_message("Click below and I'll send you your own team's schedule.", view=view)
+        await interaction.response.send_message("Click below to look up any team's schedule, sent just to you.", view=view)
 
     @schedule_group.command(name="add", description="Schedule a match")
     @app_commands.describe(
