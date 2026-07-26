@@ -80,11 +80,11 @@ def _truncate_to_fit(draw, text: str, font, max_width: float) -> str:
 # of team name length or game number size -- HOME and AWAY each get their
 # own reserved budget, and the game#/icon block at the far right is
 # reserved space that team names are truncated to never reach.
-TIME_ZONE_END = 108
-HOME_ZONE_END = 328
-AWAY_ZONE_START = 338
-AWAY_ZONE_END = 558
-RIGHT_ZONE_START = 568  # game number + status icon
+TIME_ZONE_END = 132  # measured against the actual widest realistic string, e.g. "Thu 12:00 PM EST" at ~122px
+HOME_ZONE_END = 352
+AWAY_ZONE_START = 362
+AWAY_ZONE_END = 582
+RIGHT_ZONE_START = 592  # game number + status icon
 
 
 async def _draw_week_cell(img, draw, x: int, y: int, week_num, games: list[ScheduleGame], teams_by_id: dict[int, Team], fonts: dict) -> None:
