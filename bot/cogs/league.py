@@ -9,6 +9,7 @@ from __future__ import annotations
 import datetime as dt
 
 import difflib
+import logging
 
 import discord
 from discord import app_commands
@@ -46,6 +47,8 @@ from bot.models import (
 )
 from bot.models.schedule import ScheduleStatus
 from bot.services.game_log_service import get_goalie_game_log, get_skater_game_log, get_team_recent_results
+from bot.services.github_publish_service import publish_to_website
+from bot.services.website_export_service import gather_export_data
 from bot.services.roster_service import get_team_roster
 from bot.services.unlinked_players_service import find_unlinked_players_in_game
 from bot.ui.schedule_view import ScheduleButtonView
@@ -110,6 +113,9 @@ async def player_gamertag_autocomplete(interaction: discord.Interaction, current
         stmt = stmt.order_by(Player.gamertag).limit(25)
         names = (await session.execute(stmt)).scalars().all()
     return [app_commands.Choice(name=n, value=n) for n in names]
+
+
+log = logging.getLogger(__name__)
 
 
 class LeagueCog(commands.Cog):
@@ -267,7 +273,7 @@ class LeagueCog(commands.Cog):
             try:
                 s = await get_active_season(session)
                 await recompute_standings(session, s.id)
-                await refresh_all_channels(interaction.client, session)
+                await self._refresh_everything(interaction, session)
             except SeasonNotFound:
                 pass  # no active season -- nothing to refresh
         await interaction.followup.send(embed=success_embed("Club removed", f"**{name}** has been deactivated. Historical stats/games are preserved."))
@@ -295,7 +301,7 @@ class LeagueCog(commands.Cog):
             old_id = ts.club_id
             ts.club_id = new_club_id
             await recompute_standings(session, s.id)
-            await refresh_all_channels(interaction.client, session)
+            await self._refresh_everything(interaction, session)
         await interaction.followup.send(
             embed=success_embed("Club ID updated", f"**{name}** Club ID changed from `{old_id or '—'}` to `{new_club_id}` for {s.name}.")
         )
@@ -695,7 +701,7 @@ class LeagueCog(commands.Cog):
 
             unlinked = await find_unlinked_players_in_game(session, result.game.id)
 
-            await refresh_all_channels(interaction.client, session)
+            await self._refresh_everything(interaction, session)
 
         embed = success_embed("Game imported", f"**{result.home_team.name} {result.game.home_score} - {result.game.away_score} {result.away_team.name}**")
         if result.was_merged:
@@ -876,7 +882,7 @@ class LeagueCog(commands.Cog):
                     else:
                         series_status_text = f"{series.round_name}: **{team_a.name}** {series.wins_a} - {series.wins_b} **{team_b.name}**"
 
-            await refresh_all_channels(interaction.client, session)
+            await self._refresh_everything(interaction, session)
 
         embed = success_embed("Forfeit recorded", f"**{win_team.name}** defeats **{lose_team.name}** {win_score}-{lose_score} by forfeit.\n*Reason: {reason}*")
         if series_status_text:
@@ -903,7 +909,7 @@ class LeagueCog(commands.Cog):
                 return
             game = await session.get(Game, schedule.game_id)
             await reverse_game(session, game)
-            await refresh_all_channels(interaction.client, session)
+            await self._refresh_everything(interaction, session)
         await interaction.followup.send(embed=success_embed("Game deleted", f"Game #{game_number} was removed and all stats/standings reversed."))
 
     @admin_group.command(name="generate-playoffs", description="Seed a single-elimination playoff bracket from the current standings")
@@ -1226,7 +1232,7 @@ class LeagueCog(commands.Cog):
             league_logo_url = await get_league_logo_url(session, interaction.guild_id)
             background_url = await get_league_background_url(session, interaction.guild_id)
             path = await render_standings(s.name, rows, league_logo_url, background_url)
-            await refresh_all_channels(interaction.client, session)
+            await self._refresh_everything(interaction, session)
         await interaction.followup.send(file=discord.File(path))
 
     @refresh_group.command(name="stat-leaders", description="Manually re-post the combined stat leaders graphic")
@@ -1272,7 +1278,7 @@ class LeagueCog(commands.Cog):
             league_logo_url = await get_league_logo_url(session, interaction.guild_id)
             background_url = await get_league_background_url(session, interaction.guild_id)
             path = await render_combined_leaders_board(s.name, categories, league_logo_url, background_url)
-            await refresh_all_channels(interaction.client, session)
+            await self._refresh_everything(interaction, session)
         await interaction.followup.send(file=discord.File(path))
 
     @refresh_group.command(name="match-result", description="Re-post the result graphic/recap for an already-imported game")
@@ -1529,6 +1535,19 @@ class LeagueCog(commands.Cog):
         recap = await generate_recap(ctx)
         game.recap_text = recap
         return recap
+
+    @staticmethod
+    async def _refresh_everything(interaction: discord.Interaction, session) -> None:
+        """The one place that fans out after anything changes standings/
+        schedule/stats: refreshes Discord's auto-post channels AND (if
+        configured) exports fresh data to the website. The website export
+        never raises on its own, so this is always safe to call."""
+        await refresh_all_channels(interaction.client, session)
+        try:
+            export_data = await gather_export_data(session)
+            await publish_to_website(export_data)
+        except Exception:  # noqa: BLE001
+            log.exception("Website export failed, Discord refresh already completed fine")
 
     async def _post_to_results_channel(self, interaction: discord.Interaction, embed: discord.Embed, graphic_path: str, extra_graphic_path: str | None = None) -> None:
         if not settings.channel_game_results:
