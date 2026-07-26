@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 
 from bot.graphics.logo_fetch import get_team_logo
-from bot.graphics.theme import GENERATED_DIR, Theme, load_font, prepare_canvas
+from bot.graphics.theme import GENERATED_DIR, Theme, finalize_and_save, load_font, prepare_canvas
 from bot.models import ScheduleGame, Team
 from bot.models.schedule import ScheduleStatus
 
@@ -106,5 +106,5 @@ async def render_schedule(
         draw.text((32, y + 6), f"+ {len(games) - MAX_GAMES_SHOWN} more games not shown -- use /league schedule week to see a specific week.", font=row_font, fill=Theme.TEXT_MUTED)
 
     out_path = GENERATED_DIR / f"schedule_{uuid.uuid4().hex[:8]}.png"
-    img.save(out_path)
+    finalize_and_save(img, out_path)
     return str(out_path)
