@@ -1,4 +1,3 @@
-
 """
 StandingsEntry is technically derivable from TeamSeason, but we materialize
 it as its own table so that:
@@ -10,6 +9,8 @@ It is recomputed (not incrementally patched) every time a game/forfeit is
 entered or deleted, by `services/standings_service.py`.
 """
 from __future__ import annotations
+
+from typing import Optional
 
 from sqlalchemy import ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -25,6 +26,10 @@ class StandingsEntry(Base, IDMixin, TimestampMixin):
     team_id: Mapped[int] = mapped_column(ForeignKey("teams.id", ondelete="CASCADE"), nullable=False)
 
     rank: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Captured from this same team's rank right before each recompute
+    # overwrites the table -- lets the standings graphic show a
+    # up/down/unchanged indicator without needing any history table.
+    previous_rank: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     wins: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     losses: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     ot_losses: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
@@ -36,4 +41,3 @@ class StandingsEntry(Base, IDMixin, TimestampMixin):
 
     season: Mapped["Season"] = relationship()
     team: Mapped["Team"] = relationship()
-
