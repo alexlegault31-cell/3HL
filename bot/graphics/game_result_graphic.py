@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 
 from bot.graphics.logo_fetch import get_team_logo
-from bot.graphics.theme import GENERATED_DIR, Theme, load_font, prepare_canvas
+from bot.graphics.theme import GENERATED_DIR, Theme, finalize_and_save, load_font, prepare_canvas
 from bot.models import Game, Team
 
 WIDTH, HEIGHT = 1000, 460
@@ -74,7 +74,7 @@ async def render_game_result(
     draw.text((60, HEIGHT - 50), footer, font=meta_font, fill=Theme.TEXT_MUTED)
 
     out_path = GENERATED_DIR / f"result_{uuid.uuid4().hex[:10]}.png"
-    img.save(out_path)
+    finalize_and_save(img, out_path)
     return str(out_path)
 
 
