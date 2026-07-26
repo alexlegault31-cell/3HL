@@ -4,7 +4,7 @@ from __future__ import annotations
 import uuid
 
 from bot.graphics.logo_fetch import get_team_logo
-from bot.graphics.theme import GENERATED_DIR, Theme, load_font, prepare_canvas
+from bot.graphics.theme import GENERATED_DIR, Theme, finalize_and_save, load_font, prepare_canvas
 from bot.services.leaders_service import LeaderRow
 
 COLS = 3
@@ -86,7 +86,7 @@ async def render_combined_leaders_board(
             line_y += 30
 
     out_path = GENERATED_DIR / f"combined_leaders_{uuid.uuid4().hex[:8]}.png"
-    img.save(out_path)
+    finalize_and_save(img, out_path)
     return str(out_path)
 
 
