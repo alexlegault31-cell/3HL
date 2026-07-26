@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import uuid
 
-from bot.graphics.theme import GENERATED_DIR, Theme, load_font, prepare_canvas
+from bot.graphics.theme import GENERATED_DIR, Theme, finalize_and_save, load_font, prepare_canvas
 from bot.models import Player, PlayerSeason, Team
 
 WIDTH = 1080
@@ -131,7 +131,7 @@ async def render_player_card(
     if not rows_to_show:
         draw.text((32, log_top + 40), "No games played yet this season.", font=log_row_font, fill=Theme.TEXT_MUTED)
         out_path = GENERATED_DIR / f"player_{player.id}_{uuid.uuid4().hex[:8]}.png"
-        img.save(out_path)
+        finalize_and_save(img, out_path)
         return str(out_path)
 
     header_y = log_top + 38
@@ -187,5 +187,5 @@ async def render_player_card(
         y += ROW_H
 
     out_path = GENERATED_DIR / f"player_{player.id}_{uuid.uuid4().hex[:8]}.png"
-    img.save(out_path)
+    finalize_and_save(img, out_path)
     return str(out_path)
