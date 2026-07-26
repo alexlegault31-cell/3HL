@@ -66,6 +66,27 @@ def _paginate(week_items: list[tuple]) -> list[list[list[tuple]]]:
     return pages
 
 
+def _truncate_to_fit(draw, text: str, font, max_width: float) -> str:
+    if draw.textlength(text, font=font) <= max_width:
+        return text
+    ellipsis = "…"
+    truncated = text
+    while truncated and draw.textlength(truncated + ellipsis, font=font) > max_width:
+        truncated = truncated[:-1]
+    return (truncated + ellipsis) if truncated else ellipsis
+
+
+# Fixed column zones within COL_WIDTH, verified to never overlap regardless
+# of team name length or game number size -- HOME and AWAY each get their
+# own reserved budget, and the game#/icon block at the far right is
+# reserved space that team names are truncated to never reach.
+TIME_ZONE_END = 108
+HOME_ZONE_END = 328
+AWAY_ZONE_START = 338
+AWAY_ZONE_END = 558
+RIGHT_ZONE_START = 568  # game number + status icon
+
+
 async def _draw_week_cell(img, draw, x: int, y: int, week_num, games: list[ScheduleGame], teams_by_id: dict[int, Team], fonts: dict) -> None:
     week_label = f"WEEK {week_num}" if week_num is not None else "UNSCHEDULED"
     draw.text((x, y), week_label, font=fonts["week"], fill=Theme.TEXT_MUTED)
@@ -80,29 +101,37 @@ async def _draw_week_cell(img, draw, x: int, y: int, week_num, games: list[Sched
         slot_str = f"{(g.day_of_week or '')[:3]} {g.game_time or ''}".strip() or "—"
         draw.text((x, row_y + 2), slot_str, font=fonts["time"], fill=Theme.TEXT_SECONDARY)
 
-        home_x = x + 118
+        # HOME -- small green "H" tag makes home/away unambiguous without
+        # relying on anyone knowing "left team = home" as a convention.
+        home_x = x + TIME_ZONE_END
+        draw.text((home_x, row_y + 2), "H", font=fonts["tag"], fill=Theme.WIN_GREEN)
+        home_x += 14
         home_logo = await get_team_logo(home.logo_url if home else None, (LOGO_SIZE, LOGO_SIZE))
         if home_logo is not None:
             img.paste(home_logo, (home_x, row_y), home_logo.split()[-1])
             home_x += LOGO_SIZE + 5
-        home_name = (home.name if home else "TBD")[:16]
+        home_name_budget = (x + HOME_ZONE_END) - home_x - 4
+        home_name = _truncate_to_fit(draw, home.name if home else "TBD", fonts["row"], home_name_budget)
         draw.text((home_x, row_y + 2), home_name, font=fonts["row"], fill=Theme.TEXT_PRIMARY)
 
-        vs_x = x + COL_WIDTH - 210
-        draw.text((vs_x, row_y + 2), "vs", font=fonts["row"], fill=Theme.TEXT_MUTED)
-
-        away_x = vs_x + 26
+        # AWAY -- same idea, muted-blue "A" tag for the visiting team.
+        away_x = x + AWAY_ZONE_START
+        draw.text((away_x, row_y + 2), "A", font=fonts["tag"], fill=Theme.ACCENT)
+        away_x += 14
         away_logo = await get_team_logo(away.logo_url if away else None, (LOGO_SIZE, LOGO_SIZE))
         if away_logo is not None:
             img.paste(away_logo, (away_x, row_y), away_logo.split()[-1])
             away_x += LOGO_SIZE + 5
-        away_name = (away.name if away else "TBD")[:16]
+        away_name_budget = (x + AWAY_ZONE_END) - away_x - 4
+        away_name = _truncate_to_fit(draw, away.name if away else "TBD", fonts["row"], away_name_budget)
         draw.text((away_x, row_y + 2), away_name, font=fonts["row"], fill=Theme.TEXT_PRIMARY)
 
+        # Game number + status icon -- reserved zone that team names are
+        # truncated to never reach, so this can never be covered up.
         game_number_str = f"#{g.game_number}"
         gn_w = draw.textlength(game_number_str, font=fonts["row"])
-        draw.text((x + COL_WIDTH - 34 - gn_w, row_y + 2), game_number_str, font=fonts["row"], fill=Theme.TEXT_MUTED)
-        draw.text((x + COL_WIDTH - 22, row_y), icon, font=fonts["row"], fill=status_color)
+        draw.text((x + COL_WIDTH - 30 - gn_w, row_y + 2), game_number_str, font=fonts["row"], fill=Theme.TEXT_MUTED)
+        draw.text((x + COL_WIDTH - 20, row_y), icon, font=fonts["row"], fill=status_color)
 
         row_y += ROW_H
 
@@ -132,6 +161,7 @@ async def render_schedule(
         "week": load_font("Black", 15),
         "row": load_font("Regular", 14),
         "time": load_font("Bold", 12),
+        "tag": load_font("Black", 12),
     }
 
     out_paths = []
