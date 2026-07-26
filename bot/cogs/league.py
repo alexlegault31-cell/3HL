@@ -1544,7 +1544,9 @@ class LeagueCog(commands.Cog):
         never raises on its own, so this is always safe to call."""
         await refresh_all_channels(interaction.client, session)
         try:
-            export_data = await gather_export_data(session)
+            guild_name = interaction.guild.name if interaction.guild else None
+            league_logo_url = await get_league_logo_url(session, interaction.guild_id)
+            export_data = await gather_export_data(session, guild_name=guild_name, league_logo_url=league_logo_url)
             await publish_to_website(export_data)
         except Exception:  # noqa: BLE001
             log.exception("Website export failed, Discord refresh already completed fine")
