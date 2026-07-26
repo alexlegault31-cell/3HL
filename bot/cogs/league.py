@@ -986,7 +986,9 @@ class LeagueCog(commands.Cog):
 
     @admin_group.command(name="generate-schedule", description="Auto-generate a full round-robin schedule for the league")
     @app_commands.describe(
-        times_through="How many times each team plays every other team (2 = home-and-away, like a normal season)",
+        times_through="How many times each team plays every other team (2 = home-and-away). Give only ONE of these three.",
+        games_per_team="Alternative to times_through -- target number of games per team (rounds to the nearest fair value)",
+        weeks="Alternative to times_through -- target number of weeks in the season (rounds to the nearest fair value)",
         teams="Comma-separated team names to include (optional -- defaults to every active club in the league)",
         starting_game_number="First game number to use (optional -- defaults to continuing after any existing schedule)",
     )
@@ -994,11 +996,21 @@ class LeagueCog(commands.Cog):
     async def admin_generate_schedule(
         self,
         interaction: discord.Interaction,
-        times_through: int = 2,
+        times_through: int | None = None,
+        games_per_team: int | None = None,
+        weeks: int | None = None,
         teams: str | None = None,
         starting_game_number: int | None = None,
         season: int | None = None,
     ):
+        provided = [v for v in (times_through, games_per_team, weeks) if v is not None]
+        if len(provided) > 1:
+            await interaction.response.send_message(
+                embed=error_embed("Too many options", "Give only ONE of `times_through`, `games_per_team`, or `weeks` -- not more than one."),
+                ephemeral=True,
+            )
+            return
+
         async with get_session() as session:
             try:
                 s = await resolve_season(session, season)
@@ -1027,8 +1039,36 @@ class LeagueCog(commands.Cog):
                 )
                 return
 
+            # A single round-robin pass = every team plays every other team
+            # exactly once = (num_teams - 1) games per team = (num_teams - 1)
+            # weeks. games_per_team and weeks both get translated into an
+            # effective times_through based on that -- rounding DOWN to the
+            # nearest whole pass, so every team always ends up with the
+            # exact same number of games (never an uneven schedule from a
+            # partial, truncated round).
+            games_per_full_pass = len(team_objs) - 1
+            note = None
+            if games_per_team is not None:
+                effective_times_through = max(1, games_per_team // games_per_full_pass)
+                actual = effective_times_through * games_per_full_pass
+                if actual != games_per_team:
+                    note = (
+                        f"**{games_per_team}** games per team doesn't divide evenly across **{len(team_objs)}** clubs -- "
+                        f"using the closest fair value of **{actual}** games per team instead, so every team plays the same amount."
+                    )
+            elif weeks is not None:
+                effective_times_through = max(1, weeks // games_per_full_pass)
+                actual = effective_times_through * games_per_full_pass
+                if actual != weeks:
+                    note = (
+                        f"**{weeks}** weeks doesn't divide evenly into full rounds with **{len(team_objs)}** clubs -- "
+                        f"using **{actual}** weeks instead, so every team plays the same amount."
+                    )
+            else:
+                effective_times_through = times_through if times_through is not None else 2
+
             try:
-                matchups = generate_round_robin([t.id for t in team_objs], times_through=times_through)
+                matchups = generate_round_robin([t.id for t in team_objs], times_through=effective_times_through)
             except ValueError as e:
                 await interaction.response.send_message(embed=error_embed("Couldn't generate schedule", str(e)), ephemeral=True)
                 return
@@ -1104,14 +1144,14 @@ class LeagueCog(commands.Cog):
                 next_number += 1
                 created_count += 1
 
-        await interaction.response.send_message(
-            embed=success_embed(
-                "Schedule generated",
-                f"Created **{created_count}** games across **{matchups[-1].round_number}** weeks for **{len(team_objs)}** clubs "
-                f"(each team plays every other team **{times_through}x**).\n\nGame numbers **{next_number - created_count}**–**{next_number - 1}**. "
-                f"Use `/league schedule view` to see the full schedule.",
-            )
+        summary = (
+            f"Created **{created_count}** games across **{matchups[-1].round_number}** weeks for **{len(team_objs)}** clubs "
+            f"(each team plays every other team **{effective_times_through}x**).\n\nGame numbers **{next_number - created_count}**–**{next_number - 1}**. "
+            f"Use `/league schedule view` to see the full schedule."
         )
+        if note:
+            summary += f"\n\n⚠️ {note}"
+        await interaction.response.send_message(embed=success_embed("Schedule generated", summary))
 
     @admin_group.command(name="clear-schedule", description="Delete a season's schedule so it can be regenerated cleanly")
     @app_commands.describe(
