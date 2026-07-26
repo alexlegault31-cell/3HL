@@ -1,7 +1,9 @@
 """
 Recomputes the materialized `StandingsEntry` table for a season from the
-live `TeamSeason` rows. Called after every import/delete/forfeit so reads
-(`/standings`) are always cheap and consistent.
+live `TeamSeason` rows. Called after every import/delete/forfeit -- and
+also on every plain view of /standings, so a roster change (team removed/
+added) is reflected immediately without waiting for the next game --
+so reads are always cheap, consistent, and fresh.
 
 Tiebreak order: points -> wins -> goal differential -> goals for.
 """
@@ -22,6 +24,13 @@ async def recompute_standings(session: AsyncSession, season_id: int) -> list[Sta
         )
     ).scalars().all()
 
+    old_entries_by_team = {
+        entry.team_id: entry
+        for entry in (
+            await session.execute(select(StandingsEntry).where(StandingsEntry.season_id == season_id))
+        ).scalars().all()
+    }
+
     ranked = sorted(
         team_seasons,
         key=lambda ts: (-ts.points, -ts.wins, -ts.goal_diff, -ts.goals_for),
@@ -32,10 +41,26 @@ async def recompute_standings(session: AsyncSession, season_id: int) -> list[Sta
 
     entries: list[StandingsEntry] = []
     for rank, ts in enumerate(ranked, start=1):
+        old = old_entries_by_team.get(ts.team_id)
+
+        # This function now runs on every plain /standings view too (not
+        # just after a real game), so naively snapshotting "current rank"
+        # into previous_rank on every call would make the trend arrows
+        # meaningless -- they'd just show movement since the last time
+        # someone happened to look, not since the last actual game. Only
+        # advance previous_rank when this team's underlying record
+        # actually changed; otherwise keep whatever was already stored.
+        record_changed = old is None or (old.wins, old.losses, old.ot_losses, old.points) != (ts.wins, ts.losses, ts.ot_losses, ts.points)
+        if record_changed:
+            new_previous_rank = old.rank if old is not None else None
+        else:
+            new_previous_rank = old.previous_rank if old.previous_rank is not None else old.rank
+
         entry = StandingsEntry(
             season_id=season_id,
             team_id=ts.team_id,
             rank=rank,
+            previous_rank=new_previous_rank,
             wins=ts.wins,
             losses=ts.losses,
             ot_losses=ts.ot_losses,
