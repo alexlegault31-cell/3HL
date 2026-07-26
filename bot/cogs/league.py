@@ -1046,32 +1046,35 @@ class LeagueCog(commands.Cog):
             # nearest whole pass, so every team always ends up with the
             # exact same number of games (never an uneven schedule from a
             # partial, truncated round).
+            # A round-robin "round" always has every team play exactly
+            # once -- so games_per_team and weeks are actually the SAME
+            # number (1 round = 1 game per team = 1 week), and truncating
+            # to ANY number of rounds is already perfectly fair. There's
+            # no need to round up/down to a "full pass" at all; generate
+            # enough full passes to cover the request, then cut off at
+            # exactly the number of rounds asked for.
             games_per_full_pass = len(team_objs) - 1
-            note = None
-            if games_per_team is not None:
-                effective_times_through = max(1, games_per_team // games_per_full_pass)
-                actual = effective_times_through * games_per_full_pass
-                if actual != games_per_team:
-                    note = (
-                        f"**{games_per_team}** games per team doesn't divide evenly across **{len(team_objs)}** clubs -- "
-                        f"using the closest fair value of **{actual}** games per team instead, so every team plays the same amount."
-                    )
-            elif weeks is not None:
-                effective_times_through = max(1, weeks // games_per_full_pass)
-                actual = effective_times_through * games_per_full_pass
-                if actual != weeks:
-                    note = (
-                        f"**{weeks}** weeks doesn't divide evenly into full rounds with **{len(team_objs)}** clubs -- "
-                        f"using **{actual}** weeks instead, so every team plays the same amount."
-                    )
+            target_rounds = games_per_team if games_per_team is not None else weeks
+
+            if target_rounds is not None:
+                if target_rounds < 1:
+                    await interaction.response.send_message(embed=error_embed("Invalid value", "Must be at least 1."), ephemeral=True)
+                    return
+                passes_needed = -(-target_rounds // games_per_full_pass)  # ceiling division
+                try:
+                    full_matchups = generate_round_robin([t.id for t in team_objs], times_through=passes_needed)
+                except ValueError as e:
+                    await interaction.response.send_message(embed=error_embed("Couldn't generate schedule", str(e)), ephemeral=True)
+                    return
+                matchups = [m for m in full_matchups if m.round_number <= target_rounds]
+                effective_times_through = target_rounds / games_per_full_pass  # for display only
             else:
                 effective_times_through = times_through if times_through is not None else 2
-
-            try:
-                matchups = generate_round_robin([t.id for t in team_objs], times_through=effective_times_through)
-            except ValueError as e:
-                await interaction.response.send_message(embed=error_embed("Couldn't generate schedule", str(e)), ephemeral=True)
-                return
+                try:
+                    matchups = generate_round_robin([t.id for t in team_objs], times_through=effective_times_through)
+                except ValueError as e:
+                    await interaction.response.send_message(embed=error_embed("Couldn't generate schedule", str(e)), ephemeral=True)
+                    return
 
             if starting_game_number is not None:
                 next_number = starting_game_number
@@ -1144,13 +1147,13 @@ class LeagueCog(commands.Cog):
                 next_number += 1
                 created_count += 1
 
+        actual_weeks = matchups[-1].round_number
+        games_per_team_actual = actual_weeks  # one round = one game per team, always
         summary = (
-            f"Created **{created_count}** games across **{matchups[-1].round_number}** weeks for **{len(team_objs)}** clubs "
-            f"(each team plays every other team **{effective_times_through}x**).\n\nGame numbers **{next_number - created_count}**–**{next_number - 1}**. "
+            f"Created **{created_count}** games across **{actual_weeks}** weeks for **{len(team_objs)}** clubs "
+            f"(**{games_per_team_actual}** games per team).\n\nGame numbers **{next_number - created_count}**–**{next_number - 1}**. "
             f"Use `/league schedule view` to see the full schedule."
         )
-        if note:
-            summary += f"\n\n⚠️ {note}"
         await interaction.response.send_message(embed=success_embed("Schedule generated", summary))
 
     @admin_group.command(name="clear-schedule", description="Delete a season's schedule so it can be regenerated cleanly")
