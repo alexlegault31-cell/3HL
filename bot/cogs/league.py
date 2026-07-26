@@ -65,7 +65,15 @@ from bot.services.leaders_service import (
     shutouts_leaders,
     takeaways_leaders,
 )
-from bot.services.league_settings import get_league_background_url, get_league_logo_url, set_league_background_url
+from bot.services.league_settings import (
+    get_league_background_url,
+    get_league_logo_url,
+    get_schedule_first_week_pattern,
+    get_schedule_pattern,
+    set_league_background_url,
+    set_schedule_first_week_pattern,
+    set_schedule_pattern,
+)
 from bot.services.playoff_service import PlayoffError, advance_round, generate_bracket, get_bracket, record_series_result
 from bot.services.recap_generator import RecapContext, format_top_performers, generate_recap
 from bot.services.schedule_generator import generate_round_robin
@@ -1062,11 +1070,14 @@ class LeagueCog(commands.Cog):
             # at these 4 times, cycled through in order for each week's
             # games (fills each day's 4 times before moving to the next
             # day, e.g. Tue 8:00 -> Tue 8:30 -> Tue 9:00 -> Tue 9:30 -> Wed 8:00 ...).
-            SLOT_SEQUENCE = [
-                ("Tuesday", "8:00 PM EST"), ("Tuesday", "8:30 PM EST"), ("Tuesday", "9:00 PM EST"), ("Tuesday", "9:30 PM EST"),
-                ("Wednesday", "8:00 PM EST"), ("Wednesday", "8:30 PM EST"), ("Wednesday", "9:00 PM EST"), ("Wednesday", "9:30 PM EST"),
-                ("Thursday", "8:00 PM EST"), ("Thursday", "8:30 PM EST"), ("Thursday", "9:00 PM EST"), ("Thursday", "9:30 PM EST"),
-            ]
+            def parse_slot(slot_str: str) -> tuple[str, str]:
+                day, _, time = slot_str.strip().partition(" ")
+                return day, time
+
+            regular_pattern = await get_schedule_pattern(session, interaction.guild_id)
+            first_week_pattern = await get_schedule_first_week_pattern(session, interaction.guild_id)
+            regular_slots = [parse_slot(s) for s in regular_pattern]
+            first_week_slots = [parse_slot(s) for s in first_week_pattern] if first_week_pattern else None
 
             created_count = 0
             current_round = None
@@ -1075,7 +1086,8 @@ class LeagueCog(commands.Cog):
                 if m.round_number != current_round:
                     current_round = m.round_number
                     slot_index = 0
-                day_of_week, game_time = SLOT_SEQUENCE[slot_index % len(SLOT_SEQUENCE)]
+                active_slots = first_week_slots if (m.round_number == 1 and first_week_slots) else regular_slots
+                day_of_week, game_time = active_slots[slot_index % len(active_slots)]
                 slot_index += 1
 
                 session.add(
@@ -1267,6 +1279,34 @@ class LeagueCog(commands.Cog):
     # ==================================================================
     # /league schedule
     # ==================================================================
+
+    @schedule_group.command(name="set-pattern", description="Set this league's recurring weekly game day/time slots")
+    @app_commands.describe(pattern="Slots separated by ' | ', e.g. 'Tuesday 8:00 PM EST | Wednesday 8:00 PM EST | Thursday 8:00 PM EST'")
+    @commissioner_only()
+    async def schedule_set_pattern(self, interaction: discord.Interaction, pattern: str):
+        slots = [s.strip() for s in pattern.split("|") if s.strip()]
+        if not slots:
+            await interaction.response.send_message(embed=error_embed("Empty pattern", "Provide at least one slot."), ephemeral=True)
+            return
+        async with get_session() as session:
+            await set_schedule_pattern(session, interaction.guild_id, slots)
+        await interaction.response.send_message(
+            embed=success_embed("Schedule pattern set", f"{len(slots)} slot(s) will now cycle each week:\n" + "\n".join(f"• {s}" for s in slots))
+        )
+
+    @schedule_group.command(name="set-first-week-pattern", description="Set a one-time different pattern for week 1 only (e.g. a single starting day)")
+    @app_commands.describe(pattern="Same format as set-pattern. Leave blank to clear the override and use the regular pattern for week 1 too.")
+    @commissioner_only()
+    async def schedule_set_first_week_pattern(self, interaction: discord.Interaction, pattern: str = ""):
+        slots = [s.strip() for s in pattern.split("|") if s.strip()] if pattern else None
+        async with get_session() as session:
+            await set_schedule_first_week_pattern(session, interaction.guild_id, slots)
+        if slots:
+            await interaction.response.send_message(
+                embed=success_embed("Week 1 pattern set", f"Week 1 only will use:\n" + "\n".join(f"• {s}" for s in slots) + "\n\nEvery week after uses the regular pattern.")
+            )
+        else:
+            await interaction.response.send_message(embed=success_embed("Week 1 override cleared", "Week 1 will now use the regular weekly pattern like every other week."))
 
     @schedule_group.command(name="post-button", description="Post a 'My Schedule' button in this channel")
     @commissioner_only()
