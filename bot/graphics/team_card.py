@@ -12,7 +12,7 @@ import uuid
 from typing import Sequence
 
 from bot.graphics.logo_fetch import get_team_logo
-from bot.graphics.theme import GENERATED_DIR, Theme, load_font, prepare_canvas
+from bot.graphics.theme import GENERATED_DIR, Theme, finalize_and_save, load_font, prepare_canvas
 from bot.models import Team, TeamSeason
 from bot.services.leaders_service import LeaderRow
 
@@ -189,7 +189,7 @@ async def render_team_card(
             hy += HISTORY_ROW_H
 
     out_path = GENERATED_DIR / f"team_{team.id}_{uuid.uuid4().hex[:8]}.png"
-    img.save(out_path)
+    finalize_and_save(img, out_path)
     return str(out_path)
 
 
@@ -227,7 +227,7 @@ async def render_leaders_board(
     if not rows:
         draw.text((40, header_h + 20), "No data recorded yet this season.", font=row_font, fill=Theme.TEXT_MUTED)
         out_path = GENERATED_DIR / f"leaders_{uuid.uuid4().hex[:8]}.png"
-        img.save(out_path)
+        finalize_and_save(img, out_path)
         return str(out_path)
 
     y = header_h + 6
@@ -263,5 +263,5 @@ async def render_leaders_board(
         y += row_h
 
     out_path = GENERATED_DIR / f"leaders_{uuid.uuid4().hex[:8]}.png"
-    img.save(out_path)
+    finalize_and_save(img, out_path)
     return str(out_path)
