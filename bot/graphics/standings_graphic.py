@@ -7,7 +7,7 @@ from typing import Sequence
 from PIL import ImageDraw
 
 from bot.graphics.logo_fetch import get_team_logo
-from bot.graphics.theme import GENERATED_DIR, Theme, load_font, prepare_canvas
+from bot.graphics.theme import GENERATED_DIR, Theme, draw_soft_divider, finalize_and_save, load_font, prepare_canvas
 from bot.models import StandingsEntry, Team
 
 ROW_H = 58
@@ -67,7 +67,7 @@ async def render_standings(
         ("streak", "STRK"),
     ]:
         draw.text((COL_X[key], header_y), label, font=header_font, fill=Theme.TEXT_MUTED)
-    draw.line([(40, HEADER_H + 44), (WIDTH - 40, HEADER_H + 44)], fill=accent_color, width=2)
+    draw_soft_divider(draw, HEADER_H + 44, WIDTH, accent_color, x_start=40)
 
     y = HEADER_H + 56
     for i, (entry, team) in enumerate(rows):
@@ -77,6 +77,18 @@ async def render_standings(
             draw.rectangle([(0, y - 8), (WIDTH, y + ROW_H - 12)], fill=Theme.BG_PANEL)
         # Colored left accent bar per row, using the team's real color.
         draw.rectangle([(0, y - 8), (6, y + ROW_H - 12)], fill=team_color)
+
+        # Trend indicator -- drawn as filled triangles rather than relying
+        # on a font actually having ▲/▼ glyphs, which isn't guaranteed.
+        prev_rank = getattr(entry, "previous_rank", None)
+        arrow_cx, arrow_cy = 18, y + 9
+        if prev_rank is not None and prev_rank != entry.rank:
+            if entry.rank < prev_rank:  # moved up -- lower rank number is better
+                draw.polygon([(arrow_cx, arrow_cy - 6), (arrow_cx - 6, arrow_cy + 5), (arrow_cx + 6, arrow_cy + 5)], fill=Theme.WIN_GREEN)
+            else:
+                draw.polygon([(arrow_cx, arrow_cy + 6), (arrow_cx - 6, arrow_cy - 5), (arrow_cx + 6, arrow_cy - 5)], fill=Theme.LOSS_RED)
+        else:
+            draw.rectangle([(arrow_cx - 6, arrow_cy - 1), (arrow_cx + 6, arrow_cy + 1)], fill=Theme.TEXT_MUTED)
 
         rank_color = Theme.GOLD if entry.rank == 1 else (Theme.SILVER if entry.rank == 2 else (Theme.BRONZE if entry.rank == 3 else Theme.TEXT_PRIMARY))
         rank_str = str(entry.rank)
@@ -109,5 +121,5 @@ async def render_standings(
         y += ROW_H
 
     out_path = GENERATED_DIR / f"standings_{uuid.uuid4().hex[:10]}.png"
-    img.save(out_path)
+    finalize_and_save(img, out_path)
     return str(out_path)
