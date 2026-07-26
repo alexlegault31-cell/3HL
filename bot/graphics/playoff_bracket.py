@@ -8,7 +8,7 @@ import uuid
 from PIL import Image, ImageDraw
 
 from bot.graphics.logo_fetch import get_team_logo
-from bot.graphics.theme import GENERATED_DIR, Theme, load_font, prepare_canvas
+from bot.graphics.theme import GENERATED_DIR, Theme, finalize_and_save, load_font, prepare_canvas
 from bot.models import PlayoffSeries, Team
 
 ROUND_WIDTH = 300
@@ -108,7 +108,7 @@ async def render_playoff_bracket(
                 draw.line([(connector_x + 15, next_center), (connector_x + 30, next_center)], fill=accent_color, width=2)
 
     out_path = GENERATED_DIR / f"bracket_{uuid.uuid4().hex[:8]}.png"
-    img.save(out_path)
+    finalize_and_save(img, out_path)
     return str(out_path)
 
 
