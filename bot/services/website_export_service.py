@@ -103,6 +103,8 @@ async def gather_export_data(session: AsyncSession, guild_name: str | None = Non
                 "id": player.id, "name": player.gamertag, "teamId": ps.team_id, "pos": "F", "goalie": False,
                 "gp": ps.games_played, "g": ps.goals, "a": ps.assists, "p": ps.points,
                 "pim": ps.pim, "hits": ps.hits,
+                "fow": ps.faceoffs_won, "fol": ps.faceoffs_lost,
+                "ta": ps.takeaways, "int": ps.interceptions, "bs": ps.blocked_shots,
             })
 
     # Full per-game recap data -- most recent first.
