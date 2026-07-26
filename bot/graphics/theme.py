@@ -85,6 +85,45 @@ def _lerp_color(c1: tuple[int, int, int], c2: tuple[int, int, int], t: float) ->
     return tuple(int(c1[i] + (c2[i] - c1[i]) * t) for i in range(3))  # type: ignore[return-value]
 
 
+def _round_corners(img: Image.Image, radius: int) -> Image.Image:
+    """Masks the four corners of the final image into a rounded rectangle.
+    Applied once at save time (not in prepare_canvas) since it needs to
+    happen AFTER every graphic has finished drawing its content on top of
+    the base canvas."""
+    img = img.convert("RGBA")
+    mask = Image.new("L", img.size, 0)
+    mask_draw = ImageDraw.Draw(mask)
+    mask_draw.rounded_rectangle([(0, 0), (img.size[0] - 1, img.size[1] - 1)], radius=radius, fill=255)
+    img.putalpha(mask)
+    return img
+
+
+def finalize_and_save(img: Image.Image, path, corner_radius: int = 20) -> None:
+    """The one shared 'save' step every graphic should use instead of
+    calling img.save() directly -- applies rounded corners universally so
+    every graphic in the bot gets the same polished edge treatment from
+    one place, rather than each file reimplementing it."""
+    rounded = _round_corners(img, corner_radius)
+    rounded.save(path)
+
+
+def draw_soft_divider(draw: ImageDraw.ImageDraw, y: int, width: int, color: tuple[int, int, int], x_start: int = 0) -> None:
+    """A divider line that fades out toward both ends instead of a hard
+    solid bar all the way across -- reads as noticeably more polished on
+    the highest-visibility graphics (standings, leaders board)."""
+    span = width - x_start
+    fade_zone = min(120, span // 3)
+    for x in range(x_start, width):
+        dist_from_edge = min(x - x_start, width - x)
+        if dist_from_edge < fade_zone:
+            t = dist_from_edge / fade_zone
+        else:
+            t = 1.0
+        faded = _lerp_color(Theme.BG_DARK, color, t)
+        draw.point((x, y), fill=faded)
+        draw.point((x, y + 1), fill=faded)
+
+
 async def prepare_canvas(
     width: int,
     height: int,
@@ -100,8 +139,8 @@ async def prepare_canvas(
 
     Otherwise, falls back to a solid dark background with a gradient
     banner (dark navy -> the league's accent color) across the top
-    `banner_height` pixels, which is the built-in look with no
-    configuration needed.
+    `banner_height` pixels, plus a subtle radial glow for visual depth,
+    which is the built-in look with no configuration needed.
     """
     if background_url:
         # Imported here (not at module top) to avoid a circular import,
@@ -122,6 +161,26 @@ async def prepare_canvas(
         for y in range(banner_height):
             t = (y / banner_height) * 0.6
             draw.line([(0, y), (width, y)], fill=_lerp_color(dark_navy, muted_accent, t))
+
+        # Subtle radial glow in the upper-right (where the league logo
+        # typically sits) -- adds real depth instead of a flat linear
+        # fade, without being loud or distracting from the content below.
+        glow_cx, glow_cy = int(width * 0.82), int(banner_height * 0.35)
+        glow_radius = int(banner_height * 1.3)
+        glow_layer = Image.new("RGB", (width, banner_height), (0, 0, 0))
+        glow_draw = ImageDraw.Draw(glow_layer)
+        for r in range(glow_radius, 0, -4):
+            t = 1 - (r / glow_radius)
+            glow_color = _lerp_color((0, 0, 0), accent_color, t * 0.35)
+            glow_draw.ellipse(
+                [(glow_cx - r, glow_cy - r), (glow_cx + r, glow_cy + r)],
+                fill=glow_color,
+            )
+        banner_region = img.crop((0, 0, width, banner_height))
+        blended = Image.blend(banner_region, glow_layer, 0.5)
+        img.paste(blended, (0, 0))
+        draw = ImageDraw.Draw(img)
+
         draw.rectangle([(0, banner_height - 4), (width, banner_height)], fill=accent_color)
 
     return img, draw
