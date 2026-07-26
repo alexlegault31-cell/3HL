@@ -1039,22 +1039,36 @@ class LeagueCog(commands.Cog):
                 )
                 return
 
-            # A single round-robin pass = every team plays every other team
-            # exactly once = (num_teams - 1) games per team = (num_teams - 1)
-            # weeks. games_per_team and weeks both get translated into an
-            # effective times_through based on that -- rounding DOWN to the
-            # nearest whole pass, so every team always ends up with the
-            # exact same number of games (never an uneven schedule from a
-            # partial, truncated round).
+            # The league's configured weekly time slots -- each slot is one
+            # full round (every team plays once, simultaneously, against a
+            # different opponent) so "4 games per night" means 4 separate
+            # rounds happen that night, not 4 teams sharing one round.
+            def parse_slot(slot_str: str) -> tuple[str, str]:
+                day, _, time = slot_str.strip().partition(" ")
+                return day, time
+
+            regular_pattern = await get_schedule_pattern(session, interaction.guild_id)
+            first_week_pattern = await get_schedule_first_week_pattern(session, interaction.guild_id)
+            regular_slots = [parse_slot(s) for s in regular_pattern]
+            first_week_slots = [parse_slot(s) for s in first_week_pattern] if first_week_pattern else None
+
             # A round-robin "round" always has every team play exactly
-            # once -- so games_per_team and weeks are actually the SAME
-            # number (1 round = 1 game per team = 1 week), and truncating
-            # to ANY number of rounds is already perfectly fair. There's
-            # no need to round up/down to a "full pass" at all; generate
-            # enough full passes to cover the request, then cut off at
-            # exactly the number of rounds asked for.
+            # once. games_per_team is a direct target (however many total
+            # games each team should end up with). weeks means actual
+            # CALENDAR weeks -- since each calendar week contains one round
+            # per configured slot (e.g. 3 nights x 4 times = 12 rounds in
+            # one calendar week), weeks needs multiplying by how many
+            # rounds a week actually holds, not treated as 1 round = 1 week.
             games_per_full_pass = len(team_objs) - 1
-            target_rounds = games_per_team if games_per_team is not None else weeks
+            if games_per_team is not None:
+                target_rounds = games_per_team
+            elif weeks is not None:
+                if first_week_slots:
+                    target_rounds = len(first_week_slots) + max(0, weeks - 1) * len(regular_slots)
+                else:
+                    target_rounds = weeks * len(regular_slots)
+            else:
+                target_rounds = None
 
             if target_rounds is not None:
                 if target_rounds < 1:
@@ -1067,7 +1081,6 @@ class LeagueCog(commands.Cog):
                     await interaction.response.send_message(embed=error_embed("Couldn't generate schedule", str(e)), ephemeral=True)
                     return
                 matchups = [m for m in full_matchups if m.round_number <= target_rounds]
-                effective_times_through = target_rounds / games_per_full_pass  # for display only
             else:
                 effective_times_through = times_through if times_through is not None else 2
                 try:
@@ -1109,35 +1122,34 @@ class LeagueCog(commands.Cog):
                 )
                 return
 
-            # The league's fixed weekly time slots -- always these 3 days
-            # at these 4 times, cycled through in order for each week's
-            # games (fills each day's 4 times before moving to the next
-            # day, e.g. Tue 8:00 -> Tue 8:30 -> Tue 9:00 -> Tue 9:30 -> Wed 8:00 ...).
-            def parse_slot(slot_str: str) -> tuple[str, str]:
-                day, _, time = slot_str.strip().partition(" ")
-                return day, time
-
-            regular_pattern = await get_schedule_pattern(session, interaction.guild_id)
-            first_week_pattern = await get_schedule_first_week_pattern(session, interaction.guild_id)
-            regular_slots = [parse_slot(s) for s in regular_pattern]
-            first_week_slots = [parse_slot(s) for s in first_week_pattern] if first_week_pattern else None
-
+            # Slot assignment: advance to the next slot only when moving to
+            # a NEW ROUND, never mid-round -- every game within one round
+            # is simultaneous and must share the same day/time. The
+            # calendar week number (shown as "week" everywhere else in the
+            # bot) is tracked separately from the internal round number,
+            # since one calendar week can contain many rounds.
             created_count = 0
-            current_round = None
-            slot_index = 0
+            current_round_number = None
+            calendar_week = 1
+            slot_position = 0
+            active_pattern = first_week_slots if first_week_slots else regular_slots
+            day_of_week, game_time = active_pattern[0]
+
             for m in matchups:
-                if m.round_number != current_round:
-                    current_round = m.round_number
-                    slot_index = 0
-                active_slots = first_week_slots if (m.round_number == 1 and first_week_slots) else regular_slots
-                day_of_week, game_time = active_slots[slot_index % len(active_slots)]
-                slot_index += 1
+                if m.round_number != current_round_number:
+                    current_round_number = m.round_number
+                    if slot_position >= len(active_pattern):
+                        calendar_week += 1
+                        slot_position = 0
+                        active_pattern = regular_slots  # only the very first calendar week can use the override
+                    day_of_week, game_time = active_pattern[slot_position]
+                    slot_position += 1
 
                 session.add(
                     ScheduleGame(
                         season_id=s.id,
                         game_number=next_number,
-                        week=m.round_number,
+                        week=calendar_week,
                         home_team_id=m.home_team_id,
                         away_team_id=m.away_team_id,
                         day_of_week=day_of_week,
@@ -1147,10 +1159,9 @@ class LeagueCog(commands.Cog):
                 next_number += 1
                 created_count += 1
 
-        actual_weeks = matchups[-1].round_number
-        games_per_team_actual = actual_weeks  # one round = one game per team, always
+        games_per_team_actual = matchups[-1].round_number  # one round = one game per team, always
         summary = (
-            f"Created **{created_count}** games across **{actual_weeks}** weeks for **{len(team_objs)}** clubs "
+            f"Created **{created_count}** games across **{calendar_week}** calendar week(s) for **{len(team_objs)}** clubs "
             f"(**{games_per_team_actual}** games per team).\n\nGame numbers **{next_number - created_count}**–**{next_number - 1}**. "
             f"Use `/league schedule view` to see the full schedule."
         )
