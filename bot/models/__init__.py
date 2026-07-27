@@ -12,6 +12,7 @@ from bot.models.award import Award, AwardWinner  # noqa: F401
 from bot.models.transaction import Transaction  # noqa: F401
 from bot.models.settings import GuildSetting  # noqa: F401
 from bot.models.playoff import PlayoffSeries  # noqa: F401
+from bot.models.captured_match import CapturedMatch  # noqa: F401
 
 __all__ = [
     "Base",
@@ -35,4 +36,6 @@ __all__ = [
     "Transaction",
     "GuildSetting",
     "PlayoffSeries",
+    "CapturedMatch",
 ]
+
