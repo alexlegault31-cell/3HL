@@ -87,20 +87,47 @@ async def gather_export_data(session: AsyncSession, guild_name: str | None = Non
     player_seasons = (
         await session.execute(select(PlayerSeason).where(PlayerSeason.season_id == season.id, PlayerSeason.games_played > 0))
     ).scalars().all()
+
+    async def current_team_and_position(player_id: int, fallback_team_id, is_goalie: bool):
+        """A player's CURRENT team is whichever team they played for in
+        their most recent game this season -- if they've since played for
+        a new team, that's a trade, and this reflects it automatically.
+        Position is the most common one across their games this season
+        (skaters can play multiple positions across a season)."""
+        rows = (
+            await session.execute(
+                select(PlayerGameStat, ScheduleGame.week, ScheduleGame.game_number)
+                .join(Game, Game.id == PlayerGameStat.game_id)
+                .join(ScheduleGame, ScheduleGame.game_id == Game.id)
+                .where(PlayerGameStat.player_id == player_id, ScheduleGame.season_id == season.id)
+                .order_by(ScheduleGame.week.desc(), ScheduleGame.game_number.desc())
+            )
+        ).all()
+        if not rows:
+            return fallback_team_id, ("G" if is_goalie else "F")
+
+        current_team_id = rows[0][0].team_id
+        if is_goalie:
+            return current_team_id, "G"
+        positions = [r[0].position for r in rows if r[0].position]
+        most_common = max(set(positions), key=positions.count) if positions else "F"
+        return current_team_id, most_common.upper()
+
     players_json = []
     for ps in player_seasons:
         player = await session.get(Player, ps.player_id)
         if player is None:
             continue
+        team_id, pos = await current_team_and_position(player.id, ps.team_id, player.is_goalie)
         if player.is_goalie:
             players_json.append({
-                "id": player.id, "name": player.gamertag, "teamId": ps.team_id, "pos": "G", "goalie": True,
+                "id": player.id, "name": player.gamertag, "teamId": team_id, "pos": pos, "goalie": True,
                 "gp": ps.games_played, "w": ps.wins, "l": ps.losses, "otl": ps.ot_losses,
                 "gaa": ps.gaa, "svp": ps.save_pct, "so": ps.shutouts,
             })
         else:
             players_json.append({
-                "id": player.id, "name": player.gamertag, "teamId": ps.team_id, "pos": "F", "goalie": False,
+                "id": player.id, "name": player.gamertag, "teamId": team_id, "pos": pos, "goalie": False,
                 "gp": ps.games_played, "g": ps.goals, "a": ps.assists, "p": ps.points,
                 "pim": ps.pim, "hits": ps.hits,
                 "fow": ps.faceoffs_won, "fol": ps.faceoffs_lost,
@@ -204,3 +231,4 @@ async def gather_export_data(session: AsyncSession, guild_name: str | None = Non
         "gameResults": game_results_json,
         "bracket": bracket_json,
     }
+
