@@ -55,6 +55,7 @@ from bot.models import (
 )
 from bot.models.schedule import ScheduleStatus
 from bot.services.chelstats_client import ChelStatsClient, MatchDetail, combine_matches
+from bot.services.match_capture_service import get_archived_matches_for_club
 from bot.services.standings_service import recompute_standings
 
 log = logging.getLogger(__name__)
@@ -114,7 +115,7 @@ async def import_game(
     # signal there. The intended playoff workflow is submitting each game
     # right after it's played, which sidesteps the ambiguity entirely.
     allow_auto_merge = (not schedule.is_playoffs) and (not disable_auto_merge)
-    match_detail = await _find_matching_match(client, home_ts.club_id, away_ts.club_id, allow_auto_merge=allow_auto_merge)
+    match_detail = await _find_matching_match(session, client, home_ts.club_id, away_ts.club_id, allow_auto_merge=allow_auto_merge)
     if match_detail is None:
         raise ImportError_(
             f"Couldn't find a recent EASHL match between {home_team_obj.name} "
@@ -398,10 +399,23 @@ LAGOUT_MERGE_WINDOW_MINUTES = 60
 
 
 async def _find_matching_match(
-    client: ChelStatsClient, home_club_id: int, away_club_id: int, *, allow_auto_merge: bool = True
+    session: AsyncSession, client: ChelStatsClient, home_club_id: int, away_club_id: int, *, allow_auto_merge: bool = True
 ) -> Optional[MatchDetail]:
-    home_matches = await client.get_recent_club_matches(home_club_id)
-    away_match_ids = {m.match_id for m in await client.get_recent_club_matches(away_club_id)}
+    # Merge live results with anything the background capture loop has
+    # already archived for this club -- protects against a match having
+    # scrolled out of EA's own live "last ~5 games" window between when
+    # it was played and when someone gets around to importing it. Live
+    # results take priority on any id collision (more likely to be
+    # complete/current), archived entries just fill in anything missing.
+    home_live = await client.get_recent_club_matches(home_club_id)
+    home_archived = await get_archived_matches_for_club(session, home_club_id)
+    home_by_id = {m.match_id: m for m in home_archived}
+    home_by_id.update({m.match_id: m for m in home_live})
+    home_matches = list(home_by_id.values())
+
+    away_live = await client.get_recent_club_matches(away_club_id)
+    away_archived = await get_archived_matches_for_club(session, away_club_id)
+    away_match_ids = {m.match_id for m in away_archived} | {m.match_id for m in away_live}
 
     candidates = [m for m in home_matches if m.match_id in away_match_ids]
     if not candidates:
