@@ -40,7 +40,7 @@ async def gather_export_data(session: AsyncSession, guild_name: str | None = Non
     teams_json = [
         {
             "id": t.id, "name": t.name, "abbr": (t.abbreviation or t.name[-3:]).upper(),
-            "color": t.primary_color or "#58A6FF", "logoUrl": t.logo_url,
+            "color": t.primary_color or "#58A6FF", "logoUrl": t.logo_url, "gameCode": t.game_code,
         }
         for t in teams
     ]
@@ -231,4 +231,3 @@ async def gather_export_data(session: AsyncSession, guild_name: str | None = Non
         "gameResults": game_results_json,
         "bracket": bracket_json,
     }
-
