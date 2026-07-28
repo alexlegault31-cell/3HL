@@ -550,6 +550,24 @@ class LeagueCog(commands.Cog):
             lines = [f"• **{t.name}**" + (f" ({t.abbreviation})" if t.abbreviation else "") for t in teams]
         await interaction.response.send_message(embed=info_embed("League Clubs", "\n".join(lines)))
 
+    @list_group.command(name="linked-players", description="List Discord accounts linked to a player gamertag")
+    @app_commands.describe(gamertag="The EA gamertag to check")
+    @commissioner_only()
+    async def list_linked_players(self, interaction: discord.Interaction, gamertag: str):
+        async with get_session() as session:
+            player = await session.scalar(select(Player).where(Player.gamertag.ilike(gamertag)))
+            if not player:
+                await interaction.response.send_message(embed=error_embed("Unknown player", f"No player found with gamertag **{gamertag}**."), ephemeral=True)
+                return
+            users = (await session.execute(select(User).where(User.player_id == player.id))).scalars().all()
+            if not users:
+                await interaction.response.send_message(embed=info_embed("No links", f"No Discord accounts are linked to **{player.gamertag}**."), ephemeral=True)
+                return
+            lines = "\n".join(f"• <@{u.discord_id}> ({u.discord_username})" for u in users)
+            await interaction.response.send_message(
+                embed=info_embed(f"Linked to {player.gamertag}", lines), ephemeral=True
+            )
+
     @list_group.command(name="recent-stat-leaders", description="Stat leaders over the last N games")
     @app_commands.describe(games="Number of most recent games to consider", season="Season number (defaults to active)")
     async def list_recent_leaders(self, interaction: discord.Interaction, games: int = 10, season: int | None = None):
