@@ -19,7 +19,7 @@ COL_WIDTH = (PAGE_WIDTH - PADDING * 2 - COL_GAP * (COLS - 1)) // COLS
 
 BANNER_H = 100
 WEEK_HEADER_H = 36
-ROW_H = 50
+ROW_H = 36
 ROW_GAP_BETWEEN_WEEKS = 24
 LOGO_SIZE = 20
 
@@ -126,15 +126,21 @@ async def _draw_week_cell(img, draw, x: int, y: int, week_num, games: list[Sched
         away_name = _truncate_to_fit(draw, away.name if away else "TBD", fonts["row"], away_name_budget)
         draw.text((away_x, row_y + 2), away_name, font=fonts["row"], fill=Theme.TEXT_PRIMARY)
 
-        # Game number + status icon -- reserved zone that team names are
-        # truncated to never reach, so this can never be covered up.
+        # Game number + status icon computed FIRST (before the code), so
+        # the code's available width can be measured against wherever the
+        # game number actually starts this row -- varies with digit count.
         game_number_str = f"#{g.game_number}"
         gn_w = draw.textlength(game_number_str, font=fonts["row"])
-        draw.text((x + COL_WIDTH - 30 - gn_w, row_y + 2), game_number_str, font=fonts["row"], fill=Theme.TEXT_MUTED)
-        draw.text((x + COL_WIDTH - 20, row_y), icon, font=fonts["row"], fill=status_color)
+        game_number_x = x + COL_WIDTH - 30 - gn_w
 
         if home and home.game_code:
-            draw.text((x + TIME_ZONE_END, row_y + 24), f"Code: {home.game_code}", font=fonts["time"], fill=Theme.ACCENT)
+            code_zone_start = x + AWAY_ZONE_END + 10
+            code_zone_end = game_number_x - 10
+            code_str = _truncate_to_fit(draw, home.game_code, fonts["time"], max(0, code_zone_end - code_zone_start))
+            draw.text((code_zone_start, row_y + 4), code_str, font=fonts["time"], fill=Theme.ACCENT)
+
+        draw.text((game_number_x, row_y + 2), game_number_str, font=fonts["row"], fill=Theme.TEXT_MUTED)
+        draw.text((x + COL_WIDTH - 20, row_y), icon, font=fonts["row"], fill=status_color)
 
         row_y += ROW_H
 
