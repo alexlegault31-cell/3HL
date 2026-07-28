@@ -24,6 +24,11 @@ class Team(Base, IDMixin, TimestampMixin):
     primary_color: Mapped[Optional[str]] = mapped_column(String(7), nullable=True)  # "#C8102E"
     secondary_color: Mapped[Optional[str]] = mapped_column(String(7), nullable=True)
 
+    # The join code for this team's private lobby whenever they're the
+    # HOME team -- stays fixed across games/seasons until a commissioner
+    # updates it. Public by design (shown on both Discord and the website).
+    game_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+
     is_active: Mapped[bool] = mapped_column(default=True, nullable=False)
 
     seasons: Mapped[List["TeamSeason"]] = relationship(back_populates="team", cascade="all, delete-orphan")
