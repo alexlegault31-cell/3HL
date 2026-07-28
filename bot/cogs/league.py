@@ -319,6 +319,19 @@ class LeagueCog(commands.Cog):
             team.logo_url = logo_url
         await interaction.response.send_message(embed=success_embed("Logo updated", f"Logo set for **{name}**."))
 
+    @club_group.command(name="set-code", description="Set the join code this team's home games use")
+    @app_commands.describe(name="Club name", code="The lobby/game code opponents use to join when this team is home")
+    @app_commands.autocomplete(name=team_name_autocomplete)
+    @commissioner_only()
+    async def club_set_code(self, interaction: discord.Interaction, name: str, code: str):
+        async with get_session() as session:
+            team = await session.scalar(select(Team).where(Team.name.ilike(name)))
+            if not team:
+                await interaction.response.send_message(embed=error_embed("Unknown club", f"No club named **{name}**."), ephemeral=True)
+                return
+            team.game_code = code
+        await interaction.response.send_message(embed=success_embed("Game code set", f"**{team.name}**'s home game code is now `{code}`."))
+
     @club_group.command(name="stats", description="View a club's record for a season")
     @app_commands.describe(name="Club name", season="Season number (skips the season picker if given)")
     @app_commands.autocomplete(name=team_name_autocomplete)
