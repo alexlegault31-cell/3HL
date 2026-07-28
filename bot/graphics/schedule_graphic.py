@@ -19,7 +19,7 @@ COL_WIDTH = (PAGE_WIDTH - PADDING * 2 - COL_GAP * (COLS - 1)) // COLS
 
 BANNER_H = 100
 WEEK_HEADER_H = 36
-ROW_H = 36
+ROW_H = 50
 ROW_GAP_BETWEEN_WEEKS = 24
 LOGO_SIZE = 20
 
@@ -132,6 +132,9 @@ async def _draw_week_cell(img, draw, x: int, y: int, week_num, games: list[Sched
         gn_w = draw.textlength(game_number_str, font=fonts["row"])
         draw.text((x + COL_WIDTH - 30 - gn_w, row_y + 2), game_number_str, font=fonts["row"], fill=Theme.TEXT_MUTED)
         draw.text((x + COL_WIDTH - 20, row_y), icon, font=fonts["row"], fill=status_color)
+
+        if home and home.game_code:
+            draw.text((x + TIME_ZONE_END, row_y + 24), f"Code: {home.game_code}", font=fonts["time"], fill=Theme.ACCENT)
 
         row_y += ROW_H
 
