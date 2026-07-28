@@ -550,23 +550,41 @@ class LeagueCog(commands.Cog):
             lines = [f"• **{t.name}**" + (f" ({t.abbreviation})" if t.abbreviation else "") for t in teams]
         await interaction.response.send_message(embed=info_embed("League Clubs", "\n".join(lines)))
 
-    @list_group.command(name="linked-players", description="List Discord accounts linked to a player gamertag")
-    @app_commands.describe(gamertag="The EA gamertag to check")
+    @list_group.command(name="linked-players", description="List every player who has linked their Discord to an EA gamertag")
     @commissioner_only()
-    async def list_linked_players(self, interaction: discord.Interaction, gamertag: str):
+    async def list_linked_players(self, interaction: discord.Interaction):
         async with get_session() as session:
-            player = await session.scalar(select(Player).where(Player.gamertag.ilike(gamertag)))
-            if not player:
-                await interaction.response.send_message(embed=error_embed("Unknown player", f"No player found with gamertag **{gamertag}**."), ephemeral=True)
-                return
-            users = (await session.execute(select(User).where(User.player_id == player.id))).scalars().all()
+            users = (await session.execute(select(User).where(User.player_id.is_not(None)))).scalars().all()
             if not users:
-                await interaction.response.send_message(embed=info_embed("No links", f"No Discord accounts are linked to **{player.gamertag}**."), ephemeral=True)
+                await interaction.response.send_message(embed=info_embed("No links", "No players have linked their Discord account yet."), ephemeral=True)
                 return
-            lines = "\n".join(f"• <@{u.discord_id}> ({u.discord_username})" for u in users)
-            await interaction.response.send_message(
-                embed=info_embed(f"Linked to {player.gamertag}", lines), ephemeral=True
-            )
+
+            lines = []
+            for u in users:
+                player = await session.get(Player, u.player_id)
+                gamertag = player.gamertag if player else "Unknown"
+                lines.append(f"• <@{u.discord_id}> — **{gamertag}**")
+
+            # Discord embed descriptions cap at 4096 characters -- chunk
+            # into multiple embeds (one message can hold up to 10) so a
+            # league with many linked players never gets silently cut off.
+            chunks: list[str] = []
+            current = ""
+            for line in lines:
+                candidate = f"{current}\n{line}" if current else line
+                if len(candidate) > 3800:
+                    chunks.append(current)
+                    current = line
+                else:
+                    current = candidate
+            if current:
+                chunks.append(current)
+
+            embeds = [
+                info_embed(f"Linked Players ({len(users)})" if i == 0 else "Linked Players (cont.)", chunk)
+                for i, chunk in enumerate(chunks[:10])
+            ]
+            await interaction.response.send_message(embeds=embeds, ephemeral=True)
 
     @list_group.command(name="recent-stat-leaders", description="Stat leaders over the last N games")
     @app_commands.describe(games="Number of most recent games to consider", season="Season number (defaults to active)")
