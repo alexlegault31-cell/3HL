@@ -8,7 +8,7 @@ from typing import Optional
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from bot.models import Game, GoalieGameStat, Player, PlayerGameStat, Team
+from bot.models import Game, GoalieGameStat, Player, PlayerGameStat, ScheduleGame, Team
 
 
 @dataclass
@@ -34,6 +34,7 @@ class SkaterGameLogRow:
     interceptions: int
     pim: int
     played_at: object
+    is_playoffs: bool
 
     @property
     def pass_pct(self) -> float:
@@ -55,6 +56,7 @@ class GoalieGameLogRow:
     poke_checks: int
     desperation_saves: int
     played_at: object
+    is_playoffs: bool
 
     @property
     def save_pct(self) -> float:
@@ -78,6 +80,7 @@ async def get_skater_game_log(session: AsyncSession, player_id: int, season_id: 
         is_home = game.home_team_id == line.team_id
         opponent_id = game.away_team_id if is_home else game.home_team_id
         opponent = await session.get(Team, opponent_id)
+        schedule_row = await session.scalar(select(ScheduleGame).where(ScheduleGame.game_id == game.id))
         out.append(
             SkaterGameLogRow(
                 opponent=opponent,
@@ -101,6 +104,7 @@ async def get_skater_game_log(session: AsyncSession, player_id: int, season_id: 
                 interceptions=line.interceptions,
                 pim=line.pim,
                 played_at=game.played_at,
+                is_playoffs=bool(schedule_row and schedule_row.is_playoffs),
             )
         )
     return out
@@ -122,6 +126,7 @@ async def get_goalie_game_log(session: AsyncSession, player_id: int, season_id: 
         opponent_id = game.away_team_id if is_home else game.home_team_id
         opponent = await session.get(Team, opponent_id)
         result = "W" if line.result == 1 else ("OTL" if line.result == 2 else "L")
+        schedule_row = await session.scalar(select(ScheduleGame).where(ScheduleGame.game_id == game.id))
         out.append(
             GoalieGameLogRow(
                 opponent=opponent,
@@ -135,6 +140,7 @@ async def get_goalie_game_log(session: AsyncSession, player_id: int, season_id: 
                 poke_checks=getattr(line, "poke_checks", 0),
                 desperation_saves=getattr(line, "desperation_saves", 0),
                 played_at=game.played_at,
+                is_playoffs=bool(schedule_row and schedule_row.is_playoffs),
             )
         )
     return out
