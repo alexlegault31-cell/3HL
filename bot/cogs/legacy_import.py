@@ -209,8 +209,8 @@ class LegacyImportCog(commands.Cog):
                         faceoffs_won=0, faceoffs_lost=0, takeaways=0, interceptions=0,
                         blocked_shots=0, giveaways=0, pass_attempts=0, passes_completed=0,
                         wins=w, losses=l, ot_losses=0, shots_against=sa, saves=sv,
-                        goals_against=ga_, shutouts=so, minutes_played=0.0,
-                        gaa=gaa if gaa is not None else 0.0, save_pct=svp,
+                        goals_against=ga_, shutouts=so,
+                        minutes_played=gp * 50.0,  # no real TOI data from MSO -- 50 min/game is a reasonable estimate, avoids a possible divide-by-zero if GAA is computed from this later
                     )
                 )
                 players_created += 1
