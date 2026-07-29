@@ -53,6 +53,7 @@ from bot.services.roster_service import get_team_roster
 from bot.services.unlinked_players_service import find_unlinked_players_in_game
 from bot.ui.schedule_view import ScheduleButtonView
 from bot.ui.season_picker_view import SeasonPickerView
+from bot.ui.team_picker_view import TeamPickerView
 from bot.services.leaders_service import (
     LeaderRow,
     assists_leaders,
@@ -333,42 +334,103 @@ class LeagueCog(commands.Cog):
         await interaction.response.send_message(embed=success_embed("Game code set", f"**{team.name}**'s home game code is now `{code}`."))
 
     @club_group.command(name="stats", description="View a club's record for a season")
-    @app_commands.describe(name="Club name", season="Season number (skips the season picker if given)")
+    @app_commands.describe(
+        name="Club name (optional -- leave blank to pick a season, then a team, from a list)",
+        season="Season number (optional -- also skippable via the picker)",
+    )
     @app_commands.autocomplete(name=team_name_autocomplete)
-    async def club_stats(self, interaction: discord.Interaction, name: str, season: int | None = None):
+    async def club_stats(self, interaction: discord.Interaction, name: str | None = None, season: int | None = None):
         async with get_session() as session:
-            team = await session.scalar(select(Team).where(Team.name.ilike(name)))
-            if not team:
-                await interaction.response.send_message(embed=error_embed("Unknown club", f"No club named **{name}**."), ephemeral=True)
+            if name is not None:
+                team = await session.scalar(select(Team).where(Team.name.ilike(name)))
+                if not team:
+                    await interaction.response.send_message(embed=error_embed("Unknown club", f"No club named **{name}**."), ephemeral=True)
+                    return
+
+                if season is not None:
+                    await interaction.response.defer()
+                    try:
+                        s = await resolve_season(session, season)
+                    except SeasonNotFound as e:
+                        await interaction.followup.send(embed=error_embed("Season error", str(e)))
+                        return
+                    await self._send_club_stats_card(interaction, team.id, s.id, use_followup=True)
+                    return
+
+                seasons = (await session.execute(select(Season).order_by(Season.number.desc()))).scalars().all()
+                if not seasons:
+                    await interaction.response.send_message(embed=error_embed("No seasons", "No seasons have been created yet."), ephemeral=True)
+                    return
+                if len(seasons) == 1:
+                    await interaction.response.defer()
+                    await self._send_club_stats_card(interaction, team.id, seasons[0].id, use_followup=True)
+                    return
+
+                team_id = team.id
+
+                async def on_select(select_interaction: discord.Interaction, season_id: int) -> None:
+                    await select_interaction.response.defer()
+                    await self._send_club_stats_card(select_interaction, team_id, season_id, use_followup=True)
+
+                view = SeasonPickerView(seasons, on_select)
+                await interaction.response.send_message("Which season would you like to see?", view=view, ephemeral=True)
                 return
 
+            # No team name given -- season-first flow. This is what makes
+            # legacy/inactive teams reachable at all: the autocomplete on
+            # `name` only shows currently-active teams, but a team picker
+            # built from TeamSeason (actual participation in that season)
+            # correctly includes teams that only ever existed in a past season.
             if season is not None:
-                await interaction.response.defer()
                 try:
                     s = await resolve_season(session, season)
                 except SeasonNotFound as e:
-                    await interaction.followup.send(embed=error_embed("Season error", str(e)))
+                    await interaction.response.send_message(embed=error_embed("Season error", str(e)), ephemeral=True)
                     return
-                await self._send_club_stats_card(interaction, team.id, s.id, use_followup=True)
+                await interaction.response.defer(ephemeral=True)
+                await self._show_team_picker_for_season(interaction, s.id, use_followup=True)
                 return
 
             seasons = (await session.execute(select(Season).order_by(Season.number.desc()))).scalars().all()
             if not seasons:
                 await interaction.response.send_message(embed=error_embed("No seasons", "No seasons have been created yet."), ephemeral=True)
                 return
+
+            async def on_season_select(select_interaction: discord.Interaction, season_id: int) -> None:
+                await select_interaction.response.defer()
+                await self._show_team_picker_for_season(select_interaction, season_id, use_followup=True)
+
             if len(seasons) == 1:
-                await interaction.response.defer()
-                await self._send_club_stats_card(interaction, team.id, seasons[0].id, use_followup=True)
+                await interaction.response.defer(ephemeral=True)
+                await self._show_team_picker_for_season(interaction, seasons[0].id, use_followup=True)
                 return
 
-            team_id = team.id
-
-            async def on_select(select_interaction: discord.Interaction, season_id: int) -> None:
-                await select_interaction.response.defer()
-                await self._send_club_stats_card(select_interaction, team_id, season_id, use_followup=True)
-
-            view = SeasonPickerView(seasons, on_select)
+            view = SeasonPickerView(seasons, on_season_select)
             await interaction.response.send_message("Which season would you like to see?", view=view, ephemeral=True)
+
+    async def _show_team_picker_for_season(self, interaction: discord.Interaction, season_id: int, use_followup: bool) -> None:
+        async with get_session() as session:
+            season = await session.get(Season, season_id)
+            teams = (
+                await session.execute(
+                    select(Team).join(TeamSeason, TeamSeason.team_id == Team.id).where(TeamSeason.season_id == season_id).order_by(Team.name)
+                )
+            ).scalars().all()
+
+        send = interaction.followup.send if use_followup else interaction.response.send_message
+        if not teams:
+            await send(embed=error_embed("No teams", f"No teams found for {season.name}."), ephemeral=True)
+            return
+        if len(teams) == 1:
+            await self._send_club_stats_card(interaction, teams[0].id, season_id, use_followup=True)
+            return
+
+        async def on_team_select(select_interaction: discord.Interaction, team_id: int) -> None:
+            await select_interaction.response.defer()
+            await self._send_club_stats_card(select_interaction, team_id, season_id, use_followup=True)
+
+        view = TeamPickerView(teams, on_team_select)
+        await send(f"Which team from {season.name} would you like to see?", view=view, ephemeral=True)
 
     async def _send_club_stats_card(self, interaction: discord.Interaction, team_id: int, season_id: int, use_followup: bool) -> None:
         async with get_session() as session:
@@ -940,6 +1002,55 @@ class LeagueCog(commands.Cog):
             embed.add_field(name="Note", value="This was tagged as a playoff game, but no series was found to update.", inline=False)
         await interaction.followup.send(embed=embed, file=discord.File(graphic_path))
         await self._post_to_results_channel(interaction, embed, graphic_path)
+
+    @admin_group.command(name="merge-player", description="Move a player's stats from one name onto another (fixes split/duplicate records)")
+    @app_commands.describe(from_name="The duplicate/incorrect name currently holding the stats", into_gamertag="The correct, real EA gamertag to move those stats onto")
+    @commissioner_only()
+    async def admin_merge_player(self, interaction: discord.Interaction, from_name: str, into_gamertag: str):
+        await interaction.response.defer(ephemeral=True)
+        async with get_session() as session:
+            old_player = await session.scalar(select(Player).where(Player.gamertag.ilike(from_name)))
+            if old_player is None:
+                await interaction.followup.send(embed=error_embed("Not found", f"No player found matching **{from_name}**."))
+                return
+
+            new_player = await session.scalar(select(Player).where(Player.gamertag.ilike(into_gamertag)))
+            if new_player is None:
+                new_player = Player(gamertag=into_gamertag, is_goalie=old_player.is_goalie)
+                session.add(new_player)
+                await session.flush()
+
+            if old_player.id == new_player.id:
+                await interaction.followup.send(embed=error_embed("Same player", "Those are already the same player record."))
+                return
+
+            moved, skipped = 0, 0
+            old_seasons = (await session.execute(select(PlayerSeason).where(PlayerSeason.player_id == old_player.id))).scalars().all()
+            for ps in old_seasons:
+                collision = await session.scalar(
+                    select(PlayerSeason).where(PlayerSeason.player_id == new_player.id, PlayerSeason.season_id == ps.season_id)
+                )
+                if collision is not None:
+                    skipped += 1
+                    continue
+                ps.player_id = new_player.id
+                moved += 1
+
+            for stat in (await session.execute(select(PlayerGameStat).where(PlayerGameStat.player_id == old_player.id))).scalars().all():
+                stat.player_id = new_player.id
+            for stat in (await session.execute(select(GoalieGameStat).where(GoalieGameStat.player_id == old_player.id))).scalars().all():
+                stat.player_id = new_player.id
+
+            remaining = await session.scalar(select(PlayerSeason).where(PlayerSeason.player_id == old_player.id))
+            deleted_old = remaining is None
+            if deleted_old:
+                await session.delete(old_player)
+
+        summary = f"Moved **{moved}** season record(s) from **{from_name}** onto **{into_gamertag}**."
+        if skipped:
+            summary += f" ({skipped} skipped -- {into_gamertag} already had a record for that season, left untouched.)"
+        summary += f"\n\nOld duplicate record {'removed' if deleted_old else 'kept (still has other data attached)'}."
+        await interaction.followup.send(embed=success_embed("Player merged", summary))
 
     @admin_group.command(name="delete-game", description="Delete an imported game and reverse all stats")
     @app_commands.describe(game_number="The schedule game number to undo")
