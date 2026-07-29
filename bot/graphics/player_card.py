@@ -58,6 +58,34 @@ def _fmt_toi(minutes: float) -> str:
     return f"{mins}:{secs:02d}"
 
 
+def _aggregate_skater(rows: list) -> dict:
+    return {
+        "gp": len(rows),
+        "goals": sum(r.goals for r in rows),
+        "assists": sum(r.assists for r in rows),
+        "points": sum(r.points for r in rows),
+        "plus_minus": sum(r.plus_minus for r in rows),
+        "pim": sum(r.pim for r in rows),
+        "hits": sum(r.hits for r in rows),
+    }
+
+
+def _aggregate_goalie(rows: list) -> dict:
+    total_sa = sum(r.shots_against for r in rows)
+    total_sv = sum(r.saves for r in rows)
+    total_ga = sum(r.goals_against for r in rows)
+    total_min = sum(r.minutes_played for r in rows)
+    return {
+        "gp": len(rows),
+        "shots_against": total_sa,
+        "goals_against": total_ga,
+        "saves": total_sv,
+        "save_pct": (total_sv / total_sa) if total_sa else 0.0,
+        "gaa": (total_ga / (total_min / 60)) if total_min else 0.0,
+        "shutouts": sum(1 for r in rows if r.shutout),
+    }
+
+
 async def render_player_card(
     player: Player,
     season: PlayerSeason,
@@ -79,6 +107,7 @@ async def render_player_card(
     section_label_font = load_font("Black", 18)
     stat_label_font = load_font("Bold", 14)
     stat_val_font = load_font("Black", 28)
+    stat_val_smaller_font = load_font("Black", 22)
     role_font = load_font("Bold", 13)
     log_header_font = load_font("Bold", 13)
     log_row_font = load_font("Regular", 14)
@@ -90,38 +119,46 @@ async def render_player_card(
     team_line = f"{team.name} • {season_label} • {role}" if team else f"{season_label} • {role}"
     draw.text((34, 64), team_line, font=sub_font, fill=(210, 216, 230))
 
-    # --- Season summary ---
+    # --- Season summary: Regular Season and Playoffs side-by-side ---
+    regular_rows = [r for r in game_log if not r.is_playoffs]
+    playoff_rows = [r for r in game_log if r.is_playoffs]
+
     summary_top = BANNER_H + 14
     section_label = "GOALIE STATS" if player.is_goalie else "SKATER STATS"
     draw.text((32, summary_top), section_label, font=section_label_font, fill=Theme.TEXT_PRIMARY)
 
-    if player.is_goalie:
-        stats = [
-            ("SHOTS", str(season.shots_against)),
-            ("GA", str(season.goals_against)),
-            ("SAVES", str(season.saves)),
-            ("SAVE%", f"{season.save_pct:.3f}".lstrip("0")),
-            ("GAA", f"{season.gaa:.2f}"),
-            ("PKCHK", str(getattr(season, "poke_checks", 0))),
-            ("DESPSAVE", str(getattr(season, "desperation_saves", 0))),
-        ]
-    else:
-        stats = [
-            ("GOALS", str(season.goals)),
-            ("ASSISTS", str(season.assists)),
-            ("POINTS", str(season.points)),
-            ("PPG", str(season.ppg)),
-            ("+/-", f"{'+' if season.plus_minus > 0 else ''}{season.plus_minus}"),
-            ("PIM", str(season.pim)),
-            ("HITS", str(season.hits)),
-        ]
-    cols = len(stats)
-    cell_w = (WIDTH - 64) // cols
+    half_w = (WIDTH - 64 - 32) // 2  # 32px gap between the two halves
+    left_x = 32
+    right_x = 32 + half_w + 32
+    divider_x = right_x - 16
     row_y = summary_top + 30
-    for i, (label, value) in enumerate(stats):
-        cx = 32 + i * cell_w
-        draw.text((cx, row_y), label, font=stat_label_font, fill=Theme.TEXT_MUTED)
-        draw.text((cx, row_y + 20), value, font=stat_val_font, fill=Theme.TEXT_PRIMARY)
+    draw.line([(divider_x, row_y - 6), (divider_x, row_y + 52)], fill=Theme.BORDER, width=1)
+
+    def _stat_block(x: int, heading: str, rows: list) -> None:
+        draw.text((x, row_y - 22), heading, font=stat_label_font, fill=Theme.TEXT_MUTED)
+        if not rows:
+            draw.text((x, row_y + 4), "No games yet", font=stat_label_font, fill=Theme.TEXT_MUTED)
+            return
+        if player.is_goalie:
+            agg = _aggregate_goalie(rows)
+            stats = [
+                ("SA", str(agg["shots_against"])), ("GA", str(agg["goals_against"])), ("SV", str(agg["saves"])),
+                ("SV%", f"{agg['save_pct']:.3f}".lstrip("0")), ("GAA", f"{agg['gaa']:.2f}"), ("SO", str(agg["shutouts"])),
+            ]
+        else:
+            agg = _aggregate_skater(rows)
+            stats = [
+                ("G", str(agg["goals"])), ("A", str(agg["assists"])), ("P", str(agg["points"])),
+                ("+/-", f"{'+' if agg['plus_minus'] > 0 else ''}{agg['plus_minus']}"), ("PIM", str(agg["pim"])), ("HITS", str(agg["hits"])),
+            ]
+        cell_w = half_w // len(stats)
+        for i, (label, value) in enumerate(stats):
+            cx = x + i * cell_w
+            draw.text((cx, row_y), label, font=stat_label_font, fill=Theme.TEXT_MUTED)
+            draw.text((cx, row_y + 20), value, font=stat_val_smaller_font, fill=Theme.TEXT_PRIMARY)
+
+    _stat_block(left_x, f"REGULAR SEASON ({len(regular_rows)} GP)", regular_rows)
+    _stat_block(right_x, f"PLAYOFFS ({len(playoff_rows)} GP)", playoff_rows)
 
     # --- Game log ---
     log_top = BANNER_H + SUMMARY_H
