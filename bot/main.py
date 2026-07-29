@@ -33,8 +33,9 @@ COGS = [
     "bot.cogs.leaders",
     "bot.cogs.awards",
     "bot.cogs.channel_updater",
+    "bot.cogs.match_capture",
+    "bot.cogs.legacy_import",
 ]
-
 class NEHLBot(commands.Bot):
     def __init__(self):
         super().__init__(command_prefix=settings.command_prefix, intents=INTENTS)
