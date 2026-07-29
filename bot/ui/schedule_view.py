@@ -28,7 +28,14 @@ class ScheduleButtonView(discord.ui.View):
 
     @discord.ui.button(label="Team Schedule", style=discord.ButtonStyle.primary, custom_id=TEAM_SCHEDULE_BUTTON_CUSTOM_ID, emoji="📅")
     async def team_schedule_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await interaction.response.defer(ephemeral=True)
+        try:
+            await interaction.response.defer(ephemeral=True)
+        except discord.NotFound:
+            # The interaction token was already dead by the time this ran --
+            # almost always a gateway reconnect delivering the click late,
+            # not something this code did. Nothing to recover here; just
+            # avoid spamming the logs with an unhandled traceback.
+            return
         async with get_session() as session:
             try:
                 season = await get_active_season(session)
@@ -61,7 +68,10 @@ class _TeamPickerView(discord.ui.View):
 
     async def _callback(self, interaction: discord.Interaction) -> None:
         team_id = int(self._select.values[0])
-        await interaction.response.defer(ephemeral=True)
+        try:
+            await interaction.response.defer(ephemeral=True)
+        except discord.NotFound:
+            return  # dead interaction token (gateway reconnect delay) -- nothing to recover here
 
         async with get_session() as session:
             team = await session.get(Team, team_id)
