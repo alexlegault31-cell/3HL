@@ -113,17 +113,67 @@ async def gather_export_data(session: AsyncSession, guild_name: str | None = Non
         most_common = max(set(positions), key=positions.count) if positions else "F"
         return current_team_id, most_common.upper()
 
+    async def regular_vs_playoffs_split(player_id: int, is_goalie: bool) -> dict:
+        """Real per-game totals split by whether each game was a regular
+        season or playoff game -- computed fresh from PlayerGameStat/
+        GoalieGameStat rather than the single combined PlayerSeason total,
+        since that doesn't track the two phases separately."""
+        if is_goalie:
+            rows = (
+                await session.execute(
+                    select(GoalieGameStat, ScheduleGame.is_playoffs)
+                    .join(Game, Game.id == GoalieGameStat.game_id)
+                    .join(ScheduleGame, ScheduleGame.game_id == Game.id)
+                    .where(GoalieGameStat.player_id == player_id, ScheduleGame.season_id == season.id)
+                )
+            ).all()
+            regular = [r for r, is_po in rows if not is_po]
+            playoffs = [r for r, is_po in rows if is_po]
+
+            def agg_g(lines):
+                sa = sum(l.shots_against for l in lines)
+                sv = sum(l.saves for l in lines)
+                ga = sum(l.goals_against for l in lines)
+                mins = sum(l.minutes_played for l in lines)
+                return {
+                    "gp": len(lines), "sa": sa, "ga": ga, "sv": sv,
+                    "svp": round(sv / sa, 3) if sa else 0.0,
+                    "gaa": round(ga / (mins / 60), 2) if mins else 0.0,
+                    "so": sum(1 for l in lines if l.shutout),
+                }
+            return {"regular": agg_g(regular), "playoffs": agg_g(playoffs)}
+
+        rows = (
+            await session.execute(
+                select(PlayerGameStat, ScheduleGame.is_playoffs)
+                .join(Game, Game.id == PlayerGameStat.game_id)
+                .join(ScheduleGame, ScheduleGame.game_id == Game.id)
+                .where(PlayerGameStat.player_id == player_id, ScheduleGame.season_id == season.id)
+            )
+        ).all()
+        regular = [r for r, is_po in rows if not is_po]
+        playoffs = [r for r, is_po in rows if is_po]
+
+        def agg_s(lines):
+            return {
+                "gp": len(lines), "g": sum(l.goals for l in lines), "a": sum(l.assists for l in lines),
+                "p": sum(l.points for l in lines), "pim": sum(l.pim for l in lines), "hits": sum(l.hits for l in lines),
+            }
+        return {"regular": agg_s(regular), "playoffs": agg_s(playoffs)}
+
     players_json = []
     for ps in player_seasons:
         player = await session.get(Player, ps.player_id)
         if player is None:
             continue
         team_id, pos = await current_team_and_position(player.id, ps.team_id, player.is_goalie)
+        split = await regular_vs_playoffs_split(player.id, player.is_goalie)
         if player.is_goalie:
             players_json.append({
                 "id": player.id, "name": player.gamertag, "teamId": team_id, "pos": pos, "goalie": True,
                 "gp": ps.games_played, "w": ps.wins, "l": ps.losses, "otl": ps.ot_losses,
                 "gaa": ps.gaa, "svp": ps.save_pct, "so": ps.shutouts,
+                "split": split,
             })
         else:
             players_json.append({
@@ -132,6 +182,7 @@ async def gather_export_data(session: AsyncSession, guild_name: str | None = Non
                 "pim": ps.pim, "hits": ps.hits,
                 "fow": ps.faceoffs_won, "fol": ps.faceoffs_lost,
                 "ta": ps.takeaways, "int": ps.interceptions, "bs": ps.blocked_shots,
+                "split": split,
             })
 
     # Full per-game recap data -- most recent first.
