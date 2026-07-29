@@ -144,7 +144,7 @@ class LegacyImportCog(commands.Cog):
     async def import_legacy_2026(self, interaction: discord.Interaction) -> None:
         await interaction.response.defer()
         async with get_session() as session:
-            existing = await session.scalar(select(Season).where(Season.name == "3HL Season 2026 (Legacy)"))
+            existing = await session.scalar(select(Season).where(Season.name == "Season 1"))
             if existing is not None:
                 await interaction.followup.send(embed=error_embed("Already imported", "This legacy season already exists -- nothing to do."))
                 return
@@ -152,7 +152,7 @@ class LegacyImportCog(commands.Cog):
             existing_numbers = (await session.execute(select(Season.number))).scalars().all()
             legacy_number = min(existing_numbers, default=1) - 1  # safely before any real season
 
-            season = Season(name="3HL Season 2026 (Legacy)", number=legacy_number, is_active=False)
+            season = Season(name="Season 1", number=legacy_number, is_active=False)
             session.add(season)
             await session.flush()
 
@@ -232,7 +232,7 @@ class LegacyImportCog(commands.Cog):
         await interaction.followup.send(
             embed=success_embed(
                 "Legacy season imported",
-                f"Created **3HL Season 2026 (Legacy)** with {len(TEAM_STANDINGS)} teams, {players_created} player records, "
+                f"Created **Season 1** with {len(TEAM_STANDINGS)} teams, {players_created} player records, "
                 f"and {series_created} playoff series. This season is marked inactive -- your current season is untouched. "
                 f"Use the season picker on `/league club stats` or `/league player stats` to view it.",
             )
