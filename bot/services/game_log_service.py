@@ -158,6 +158,39 @@ class TeamRecentResult:
     played_at: object
 
 
+async def get_team_playoff_record(session: AsyncSession, team_id: int, season_id: int) -> dict:
+    """A team's actual playoff record (GP/W/L/OTL), computed fresh from
+    real playoff games -- TeamSeason only ever tracks the regular season
+    (playoff games are deliberately excluded from it elsewhere in the
+    bot), so this is the only place playoff team results exist at all."""
+    rows = (
+        await session.execute(
+            select(Game)
+            .join(ScheduleGame, ScheduleGame.game_id == Game.id)
+            .where(
+                ScheduleGame.season_id == season_id,
+                ScheduleGame.is_playoffs.is_(True),
+                or_(Game.home_team_id == team_id, Game.away_team_id == team_id),
+            )
+        )
+    ).scalars().all()
+
+    wins = losses = ot_losses = 0
+    for g in rows:
+        is_home = g.home_team_id == team_id
+        goals_for = g.home_score if is_home else g.away_score
+        goals_against = g.away_score if is_home else g.home_score
+        won = goals_for > goals_against
+        if won:
+            wins += 1
+        elif g.went_to_overtime:
+            ot_losses += 1
+        else:
+            losses += 1
+
+    return {"gp": len(rows), "wins": wins, "losses": losses, "ot_losses": ot_losses}
+
+
 async def get_team_recent_results(session: AsyncSession, team_id: int, season_id: int, limit: int = 5) -> list[TeamRecentResult]:
     """Simple recent-results recap for team cards -- just who they played
     and the final score, nothing more detailed than that."""
