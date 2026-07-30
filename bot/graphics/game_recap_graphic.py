@@ -78,21 +78,34 @@ async def render_game_recap(
     draw.rectangle([(0, 0), (WIDTH // 2, 10)], fill=home_color)
     draw.rectangle([(WIDTH // 2, 0), (WIDTH, 10)], fill=away_color)
 
+    # The center zone reserved for the score is sized from its ACTUAL
+    # rendered width for this specific game (plus margin), not a fixed
+    # guess -- a lopsided score like "10 - 0" is meaningfully wider than
+    # "1 - 0", and a fixed assumption isn't safe against that.
+    score_str = f"{game.home_score} - {game.away_score}"
+    score_w = draw.textlength(score_str, font=score_font)
+    center = WIDTH // 2
+    score_half_zone = (score_w / 2) + 40
+    home_zone_end = center - score_half_zone
+    away_zone_start = center + score_half_zone
+
     home_logo = await get_team_logo(home_team.logo_url, (LOGO_SIZE, LOGO_SIZE))
     if home_logo is not None:
         img.paste(home_logo, (40, 38), home_logo.split()[-1])
-    draw.text((40 + (LOGO_SIZE + 16 if home_logo else 0), 55), home_team.name, font=name_font, fill=Theme.TEXT_PRIMARY)
+    home_name_x = 40 + (LOGO_SIZE + 16 if home_logo else 0)
+    home_name = _truncate_to_fit(draw, home_team.name, name_font, home_zone_end - home_name_x)
+    draw.text((home_name_x, 55), home_name, font=name_font, fill=Theme.TEXT_PRIMARY)
 
-    away_name_w = draw.textlength(away_team.name, font=name_font)
     away_logo = await get_team_logo(away_team.logo_url, (LOGO_SIZE, LOGO_SIZE))
     away_logo_x = WIDTH - 40 - LOGO_SIZE
     if away_logo is not None:
         img.paste(away_logo, (away_logo_x, 38), away_logo.split()[-1])
-    away_name_x = away_logo_x - 16 - away_name_w if away_logo else WIDTH - 40 - away_name_w
-    draw.text((away_name_x, 55), away_team.name, font=name_font, fill=Theme.TEXT_PRIMARY)
+    away_zone_end = (away_logo_x - 16) if away_logo else (WIDTH - 40)
+    away_name = _truncate_to_fit(draw, away_team.name, name_font, away_zone_end - away_zone_start)
+    away_name_w = draw.textlength(away_name, font=name_font)
+    away_name_x = away_zone_end - away_name_w
+    draw.text((away_name_x, 55), away_name, font=name_font, fill=Theme.TEXT_PRIMARY)
 
-    score_str = f"{game.home_score} - {game.away_score}"
-    score_w = draw.textlength(score_str, font=score_font)
     draw.text(((WIDTH - score_w) / 2, 20), score_str, font=score_font, fill=(255, 255, 255))
 
     league_logo = await get_team_logo(league_logo_url, (36, 36))
