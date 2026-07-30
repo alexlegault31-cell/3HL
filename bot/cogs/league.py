@@ -556,6 +556,7 @@ class LeagueCog(commands.Cog):
     @player_group.command(name="link", description="Link your Discord account to your EA gamertag")
     @app_commands.describe(gamertag="Your EA gamertag", confirm="Set true to confirm creating a brand-new player if a similar name already exists")
     async def player_link(self, interaction: discord.Interaction, gamertag: str, confirm: bool = False):
+        gamertag = " ".join(gamertag.split())  # trims leading/trailing spaces and collapses any double-spaces -- a stray space would otherwise silently create a second, unlinked Player record for what looks like the same name
         async with get_session() as session:
             player = await session.scalar(select(Player).where(Player.gamertag.ilike(gamertag)))
 
