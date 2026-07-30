@@ -72,11 +72,14 @@ def _truncate_to_fit(draw, text: str, font, max_width: float) -> str:
 
 
 def _aggregate_skater(rows: list) -> dict:
+    gp = len(rows)
+    points = sum(r.points for r in rows)
     return {
-        "gp": len(rows),
+        "gp": gp,
         "goals": sum(r.goals for r in rows),
         "assists": sum(r.assists for r in rows),
-        "points": sum(r.points for r in rows),
+        "points": points,
+        "ppg": (points / gp) if gp else 0.0,
         "plus_minus": sum(r.plus_minus for r in rows),
         "pim": sum(r.pim for r in rows),
         "hits": sum(r.hits for r in rows),
@@ -145,7 +148,7 @@ def _draw_section(img, draw, y_top: int, is_goalie: bool, game_log: list, fonts:
         else:
             agg = _aggregate_skater(rows)
             stats = [
-                ("G", str(agg["goals"])), ("A", str(agg["assists"])), ("P", str(agg["points"])),
+                ("G", str(agg["goals"])), ("A", str(agg["assists"])), ("P", str(agg["points"])), ("PPG", f"{agg['ppg']:.2f}"),
                 ("+/-", f"{'+' if agg['plus_minus'] > 0 else ''}{agg['plus_minus']}"), ("PIM", str(agg["pim"])), ("HITS", str(agg["hits"])),
             ]
         cell_w = block_w // len(stats)
