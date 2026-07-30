@@ -230,7 +230,20 @@ class ChelStatsClient:
             return []
         limit = limit or settings.chelstats_match_lookback
         matches = data if isinstance(data, list) else data.get("matches", [])
-        normalized = [self._normalize_match(m) for m in matches]
+
+        # A single malformed match (e.g. a bye, an incomplete lobby, or
+        # some other EA edge case) must never take down every OTHER valid
+        # match sitting right next to it in this same list -- that was
+        # silently blocking submit-game entirely for any club whose recent
+        # history happened to include one bad entry.
+        normalized = []
+        for m in matches:
+            try:
+                normalized.append(self._normalize_match(m))
+            except ChelStatsError:
+                log.warning("Skipping malformed match for club %s: %s", club_id, m.get("clubs", "?"), exc_info=True)
+                continue
+
         normalized.sort(key=lambda m: m.timestamp, reverse=True)
         return normalized[:limit]
 
