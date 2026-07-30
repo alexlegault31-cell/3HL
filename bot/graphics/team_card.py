@@ -155,7 +155,8 @@ async def render_team_card(
             draw.text((sk_cols["g"], y), str(s.goals), font=row_font, fill=Theme.TEXT_SECONDARY)
             draw.text((sk_cols["a"], y), str(s.assists), font=row_font, fill=Theme.TEXT_SECONDARY)
             draw.text((sk_cols["p"], y), str(s.points), font=row_font, fill=Theme.TEXT_PRIMARY)
-            draw.text((sk_cols["ppg"], y), str(s.ppg), font=row_font, fill=Theme.TEXT_SECONDARY)
+            ppg = (s.points / s.games_played) if s.games_played else 0.0
+            draw.text((sk_cols["ppg"], y), f"{ppg:.2f}", font=row_font, fill=Theme.TEXT_SECONDARY)
             y += ROSTER_ROW_H
 
     gl_cols = {"name": 32, "gp": 340, "ga": 420, "gaa": 480, "saves": 550, "svpct": 630, "so": 710}
