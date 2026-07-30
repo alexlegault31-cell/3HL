@@ -1,10 +1,11 @@
 """Renders a player profile card for /league player stats -- a season
 summary (labeled SKATER STATS / GOALIE STATS) followed by a full
-per-game log. No team/league logos are drawn on this card by request."""
+per-game log. Includes the player's team logo and the league logo."""
 from __future__ import annotations
 
 import uuid
 
+from bot.graphics.logo_fetch import get_team_logo
 from bot.graphics.theme import GENERATED_DIR, Theme, finalize_and_save, load_font, prepare_canvas
 from bot.models import Player, PlayerSeason, Team
 
@@ -91,7 +92,7 @@ async def render_player_card(
     season: PlayerSeason,
     team: Team | None,
     season_label: str,
-    league_logo_url: str | None = None,  # accepted for call-site compatibility, intentionally unused -- no logos on this card
+    league_logo_url: str | None = None,
     background_url: str | None = None,
     game_log: list | None = None,
 ) -> str:
@@ -113,11 +114,22 @@ async def render_player_card(
     log_row_font = load_font("Regular", 14)
     log_title_font = load_font("Black", 18)
 
-    # --- Header banner (no logos) ---
+    # --- Header banner ---
     draw.text((32, 20), player.gamertag, font=name_font, fill=(255, 255, 255))
     role = "Goalie" if player.is_goalie else "Skater"
     team_line = f"{team.name} • {season_label} • {role}" if team else f"{season_label} • {role}"
-    draw.text((34, 64), team_line, font=sub_font, fill=(210, 216, 230))
+
+    team_line_x = 34
+    if team is not None:
+        team_logo = await get_team_logo(team.logo_url, (28, 28))
+        if team_logo is not None:
+            img.paste(team_logo, (34, 60), team_logo.split()[-1])
+            team_line_x = 34 + 28 + 8
+    draw.text((team_line_x, 66), team_line, font=sub_font, fill=(210, 216, 230))
+
+    league_logo = await get_team_logo(league_logo_url, (60, 60))
+    if league_logo is not None:
+        img.paste(league_logo, (WIDTH - 40 - 60, 20), league_logo.split()[-1])
 
     # --- Season summary: Regular Season and Playoffs side-by-side ---
     regular_rows = [r for r in game_log if not r.is_playoffs]
