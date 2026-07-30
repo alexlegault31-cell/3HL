@@ -543,14 +543,12 @@ class LeagueCog(commands.Cog):
             else:
                 team = await session.get(Team, ps.team_id) if ps.team_id else None
 
-            if player.is_goalie:
-                game_log = await get_goalie_game_log(session, player.id, s.id)
-            else:
-                game_log = await get_skater_game_log(session, player.id, s.id)
+            skater_game_log = await get_skater_game_log(session, player.id, s.id)
+            goalie_game_log = await get_goalie_game_log(session, player.id, s.id)
 
             league_logo_url = await get_league_logo_url(session, interaction.guild_id)
             background_url = await get_league_background_url(session, interaction.guild_id)
-            path = await render_player_card(player, ps, team, s.name, league_logo_url, background_url, game_log)
+            path = await render_player_card(player, ps, team, s.name, league_logo_url, background_url, skater_game_log, goalie_game_log)
 
         send = interaction.followup.send if use_followup else interaction.response.send_message
         await send(file=discord.File(path))
