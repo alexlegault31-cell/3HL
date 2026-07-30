@@ -46,7 +46,7 @@ from bot.models import (
     User,
 )
 from bot.models.schedule import ScheduleStatus
-from bot.services.game_log_service import get_goalie_game_log, get_skater_game_log, get_team_recent_results
+from bot.services.game_log_service import get_goalie_game_log, get_skater_game_log, get_team_playoff_record, get_team_recent_results
 from bot.services.github_publish_service import publish_to_website
 from bot.services.website_export_service import gather_export_data
 from bot.services.roster_service import get_team_roster
@@ -459,8 +459,9 @@ class LeagueCog(commands.Cog):
             league_logo_url = await get_league_logo_url(session, interaction.guild_id)
             background_url = await get_league_background_url(session, interaction.guild_id)
             recent_results = await get_team_recent_results(session, team.id, s.id, limit=15)
+            playoff_record = await get_team_playoff_record(session, team.id, s.id)
             skaters, goalies = await get_team_roster(session, team.id, s.id)
-            path = await render_team_card(team, ts, s.name, lines, league_logo_url, background_url, recent_results, skaters, goalies)
+            path = await render_team_card(team, ts, s.name, lines, league_logo_url, background_url, recent_results, skaters, goalies, playoff_record)
 
         send = interaction.followup.send if use_followup else interaction.response.send_message
         await send(file=discord.File(path))
