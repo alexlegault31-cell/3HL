@@ -40,6 +40,7 @@ async def render_team_card(
     recent_results: list | None = None,
     skaters: list | None = None,
     goalies: list | None = None,
+    playoff_record: dict | None = None,
 ) -> str:
     recent_results = recent_results or []
     skaters = skaters or []
@@ -79,21 +80,32 @@ async def render_team_card(
     draw.text((name_x, 20), team.name, font=name_font, fill=(255, 255, 255))
     draw.text((name_x + 2, 66), season_label, font=sub_font, fill=(210, 216, 230))
 
-    # --- Win/OTW/Loss/OTL/Points row ---
-    stat_top = BANNER_H + 16
+    # --- Win/OTW/Loss/OTL/Points row -- Regular Season / Playoffs split ---
+    stat_top = BANNER_H + 34
     ot_wins = getattr(team_season, "ot_wins", 0)
-    stats = [
-        ("WINS", str(team_season.wins)),
-        ("OT WINS", str(ot_wins)),
-        ("LOSSES", str(team_season.losses)),
-        ("OTL", str(team_season.ot_losses)),
-        ("POINTS", str(team_season.points)),
-    ]
-    cell_w = (WIDTH - 64) // len(stats)
-    for i, (label, value) in enumerate(stats):
-        cx = 32 + i * cell_w
-        draw.text((cx, stat_top), label, font=stat_label_font, fill=Theme.TEXT_MUTED)
-        draw.text((cx, stat_top + 24), value, font=stat_val_font, fill=Theme.TEXT_PRIMARY)
+    has_playoffs = bool(playoff_record and playoff_record.get("gp", 0) > 0)
+
+    def _record_block(x: int, block_w: int, wins: int, ot_w: int, losses: int, otl: int, points) -> None:
+        stats = [("WINS", str(wins)), ("OT WINS", str(ot_w)), ("LOSSES", str(losses)), ("OTL", str(otl))]
+        if points is not None:
+            stats.append(("POINTS", str(points)))
+        cell_w = block_w // len(stats)
+        for i, (label, value) in enumerate(stats):
+            cx = x + i * cell_w
+            draw.text((cx, stat_top), label, font=stat_label_font, fill=Theme.TEXT_MUTED)
+            draw.text((cx, stat_top + 24), value, font=stat_val_font, fill=Theme.TEXT_PRIMARY)
+
+    if has_playoffs:
+        half_w = (WIDTH - 64 - 32) // 2
+        left_x, right_x = 32, 32 + half_w + 32
+        divider_x = right_x - 16
+        draw.text((left_x, stat_top - 22), "REGULAR SEASON", font=stat_label_font, fill=Theme.TEXT_MUTED)
+        draw.text((right_x, stat_top - 22), f"PLAYOFFS ({playoff_record['gp']} GP)", font=stat_label_font, fill=Theme.TEXT_MUTED)
+        draw.line([(divider_x, stat_top - 6), (divider_x, stat_top + 50)], fill=Theme.BORDER, width=1)
+        _record_block(left_x, half_w, team_season.wins, ot_wins, team_season.losses, team_season.ot_losses, team_season.points)
+        _record_block(right_x, half_w, playoff_record["wins"], 0, playoff_record["losses"], playoff_record["ot_losses"], None)
+    else:
+        _record_block(32, WIDTH - 64, team_season.wins, ot_wins, team_season.losses, team_season.ot_losses, team_season.points)
 
     # --- Last 10 form strip + streak + record ---
     form_top = BANNER_H + STAT_ROW_H
