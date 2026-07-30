@@ -127,14 +127,21 @@ async def render_player_card(
     section_label = "GOALIE STATS" if player.is_goalie else "SKATER STATS"
     draw.text((32, summary_top), section_label, font=section_label_font, fill=Theme.TEXT_PRIMARY)
 
-    half_w = (WIDTH - 64 - 32) // 2  # 32px gap between the two halves
-    left_x = 32
-    right_x = 32 + half_w + 32
-    divider_x = right_x - 16
-    row_y = summary_top + 30
-    draw.line([(divider_x, row_y - 6), (divider_x, row_y + 52)], fill=Theme.BORDER, width=1)
+    has_playoffs = len(playoff_rows) > 0
+    row_y = summary_top + 44
 
-    def _stat_block(x: int, heading: str, rows: list) -> None:
+    if has_playoffs:
+        half_w = (WIDTH - 64 - 32) // 2  # 32px gap between the two halves
+        left_x = 32
+        right_x = 32 + half_w + 32
+        divider_x = right_x - 16
+        draw.line([(divider_x, row_y - 6), (divider_x, row_y + 52)], fill=Theme.BORDER, width=1)
+    else:
+        half_w = WIDTH - 64  # no playoffs yet -- regular season takes the full width, nothing else to show
+        left_x = 32
+        right_x = None
+
+    def _stat_block(x: int, block_w: int, heading: str, rows: list) -> None:
         draw.text((x, row_y - 22), heading, font=stat_label_font, fill=Theme.TEXT_MUTED)
         if not rows:
             draw.text((x, row_y + 4), "No games yet", font=stat_label_font, fill=Theme.TEXT_MUTED)
@@ -151,14 +158,15 @@ async def render_player_card(
                 ("G", str(agg["goals"])), ("A", str(agg["assists"])), ("P", str(agg["points"])),
                 ("+/-", f"{'+' if agg['plus_minus'] > 0 else ''}{agg['plus_minus']}"), ("PIM", str(agg["pim"])), ("HITS", str(agg["hits"])),
             ]
-        cell_w = half_w // len(stats)
+        cell_w = block_w // len(stats)
         for i, (label, value) in enumerate(stats):
             cx = x + i * cell_w
             draw.text((cx, row_y), label, font=stat_label_font, fill=Theme.TEXT_MUTED)
             draw.text((cx, row_y + 20), value, font=stat_val_smaller_font, fill=Theme.TEXT_PRIMARY)
 
-    _stat_block(left_x, f"REGULAR SEASON ({len(regular_rows)} GP)", regular_rows)
-    _stat_block(right_x, f"PLAYOFFS ({len(playoff_rows)} GP)", playoff_rows)
+    _stat_block(left_x, half_w, f"REGULAR SEASON ({len(regular_rows)} GP)", regular_rows)
+    if has_playoffs:
+        _stat_block(right_x, half_w, f"PLAYOFFS ({len(playoff_rows)} GP)", playoff_rows)
 
     # --- Game log ---
     log_top = BANNER_H + SUMMARY_H
