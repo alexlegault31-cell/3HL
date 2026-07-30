@@ -12,6 +12,16 @@ WIDTH, HEIGHT = 1000, 460
 CORNER_LOGO_SIZE = 64
 
 
+def _truncate_to_fit(draw, text: str, font, max_width: float) -> str:
+    if draw.textlength(text, font=font) <= max_width:
+        return text
+    ellipsis = "…"
+    truncated = text
+    while truncated and draw.textlength(truncated + ellipsis, font=font) > max_width:
+        truncated = truncated[:-1]
+    return (truncated + ellipsis) if truncated else ellipsis
+
+
 async def render_game_result(
     game: Game,
     home_team: Team,
@@ -49,14 +59,22 @@ async def render_game_result(
 
     is_home_winner = game.home_score >= game.away_score
 
-    draw.text((60, 70), "FINAL" if not game.went_to_shootout else "FINAL / SO", font=final_font, fill=Theme.TEXT_MUTED)
+    final_label = "FINAL" if not game.went_to_shootout else "FINAL / SO"
+    final_x = 18 + CORNER_LOGO_SIZE + 18  # past the home logo, never on top of it
+    draw.text((final_x, 70), final_label, font=final_font, fill=Theme.TEXT_MUTED)
     if game.went_to_overtime and not game.went_to_shootout:
-        draw.text((220, 72), "OT", font=final_font, fill=Theme.GOLD)
+        final_label_w = draw.textlength(final_label, font=final_font)
+        draw.text((final_x + final_label_w + 14, 70), "OT", font=final_font, fill=Theme.GOLD)
 
-    draw.text((60, 140), home_team.name.upper(), font=name_font, fill=Theme.TEXT_PRIMARY if is_home_winner else Theme.TEXT_SECONDARY)
+    # Reserve a fixed-width zone for each team's name so a long name can
+    # never grow unbounded into the center divider or the other side.
+    name_zone_w = WIDTH // 2 - 90
+
+    home_name = _truncate_to_fit(draw, home_team.name.upper(), name_font, name_zone_w)
+    draw.text((60, 140), home_name, font=name_font, fill=Theme.TEXT_PRIMARY if is_home_winner else Theme.TEXT_SECONDARY)
     draw.text((60, 230), str(game.home_score), font=score_font, fill=home_color)
 
-    away_name = away_team.name.upper()
+    away_name = _truncate_to_fit(draw, away_team.name.upper(), name_font, name_zone_w)
     away_name_w = draw.textlength(away_name, font=name_font)
     draw.text((WIDTH - 60 - away_name_w, 140), away_name, font=name_font, fill=Theme.TEXT_PRIMARY if not is_home_winner else Theme.TEXT_SECONDARY)
     away_score_str = str(game.away_score)
