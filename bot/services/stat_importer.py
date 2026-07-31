@@ -36,7 +36,7 @@ import logging
 from dataclasses import dataclass
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.models import (
@@ -338,6 +338,15 @@ async def reverse_game(session: AsyncSession, game: Game) -> None:
     if schedule:
         schedule.status = ScheduleStatus.SCHEDULED
         schedule.game_id = None
+
+    # Actually remove the game and every row tied to it -- without this,
+    # the Game row (and its external_match_id) stays in the database
+    # forever even after "deleting" it, which is exactly what silently
+    # blocks re-importing the same EA match after a correction.
+    await session.execute(delete(PlayerGameStat).where(PlayerGameStat.game_id == game.id))
+    await session.execute(delete(GoalieGameStat).where(GoalieGameStat.game_id == game.id))
+    await session.execute(delete(GameImport).where(GameImport.game_id == game.id))
+    await session.delete(game)
 
     season_id = game.season_id
     await session.delete(game)
