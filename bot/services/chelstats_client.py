@@ -272,11 +272,19 @@ class ChelStatsClient:
             raise ChelStatsError(f"Unexpected match shape, clubs={club_ids}")
         home_id, away_id = club_ids
 
-        # Real EA payload confirmed (July 2026): club-level score is under
-        # "score", not "goals". There's no team-level hits/pim field, so we
-        # sum those up from each club's players instead.
+        # EA overwrites the "score" field with a forfeit-awarded result
+        # whenever a match ends via player/goalie DNF (disconnect) -- that
+        # value has NO relationship to what was actually played. "gfraw"
+        # (goals for, raw) reflects the true live gameplay result in every
+        # case, DNF or not, and is what every score/win-loss determination
+        # needs to be based on. Confirmed directly against real match data:
+        # a DNF'd match showed gfraw=4 for a club whose "score" field had
+        # been overwritten to 0.
         def club_score(cid: str) -> int:
-            return int(clubs[cid].get("score", 0))
+            raw_score = clubs[cid].get("gfraw")
+            if raw_score is None:
+                raw_score = clubs[cid].get("score", 0)  # fallback for any match shape without gfraw
+            return int(raw_score)
 
         players: list[PlayerBoxScore] = []
         team_hits: dict[str, int] = {home_id: 0, away_id: 0}
