@@ -695,13 +695,19 @@ class LeagueCog(commands.Cog):
 
             skater_agg: dict[int, dict] = {}
             for line in skater_lines:
-                agg = skater_agg.setdefault(line.player_id, {"gp": 0, "goals": 0, "assists": 0, "points": 0, "plus_minus": 0, "hits": 0, "positions": []})
+                agg = skater_agg.setdefault(
+                    line.player_id,
+                    {"gp": 0, "goals": 0, "assists": 0, "points": 0, "plus_minus": 0, "hits": 0, "takeaways": 0, "interceptions": 0, "giveaways": 0, "positions": []},
+                )
                 agg["gp"] += 1
                 agg["goals"] += line.goals
                 agg["assists"] += line.assists
                 agg["points"] += line.points
                 agg["plus_minus"] += line.plus_minus
                 agg["hits"] += line.hits
+                agg["takeaways"] += line.takeaways
+                agg["interceptions"] += line.interceptions
+                agg["giveaways"] += line.giveaways
                 if line.position:
                     agg["positions"].append(line.position.upper())
 
@@ -721,19 +727,41 @@ class LeagueCog(commands.Cog):
                 agg["goals_against"] += line.goals_against
                 agg["minutes"] += line.minutes_played
 
-            async def top_skaters(pool: list, label: str) -> str:
+            async def top_forwards(pool: list) -> str:
                 ranked = sorted(pool, key=lambda kv: kv[1]["points"], reverse=True)[:5]
                 if not ranked:
-                    return f"**{label}**\nNo games from this position in the last {games} games.\n"
-                out = [f"**{label}**"]
+                    return f"**FORWARDS**\nNo games from this position in the last {games} games.\n"
+                out = ["**FORWARDS**"]
                 for i, (player_id, agg) in enumerate(ranked, start=1):
                     player = await session.get(Player, player_id)
                     pm = f"+{agg['plus_minus']}" if agg["plus_minus"] > 0 else str(agg["plus_minus"])
                     out.append(f"`{i}` **{player.gamertag}** — {agg['points']}pts ({agg['goals']}G {agg['assists']}A), {pm}, {agg['hits']} hits, {agg['gp']} GP")
                 return "\n".join(out) + "\n"
 
-            fwd_text = await top_skaters(forwards, "FORWARDS")
-            def_text = await top_skaters(defense, "DEFENSE")
+            async def top_defense(pool: list) -> str:
+                # Defensive composite: points and plus_minus reward real
+                # offensive/positive impact, takeaways and interceptions
+                # reward puck-winning defensive play, and giveaways
+                # SUBTRACT -- a high-giveaway game should hurt a
+                # defenseman's ranking, not be ignored.
+                def score(agg: dict) -> int:
+                    return agg["points"] + agg["plus_minus"] + agg["takeaways"] + agg["interceptions"] - agg["giveaways"]
+
+                ranked = sorted(pool, key=lambda kv: score(kv[1]), reverse=True)[:5]
+                if not ranked:
+                    return f"**DEFENSE**\nNo games from this position in the last {games} games.\n"
+                out = ["**DEFENSE**"]
+                for i, (player_id, agg) in enumerate(ranked, start=1):
+                    player = await session.get(Player, player_id)
+                    pm = f"+{agg['plus_minus']}" if agg["plus_minus"] > 0 else str(agg["plus_minus"])
+                    out.append(
+                        f"`{i}` **{player.gamertag}** — {agg['points']}pts, {pm}, "
+                        f"{agg['takeaways']} TA, {agg['interceptions']} INT, {agg['giveaways']} GV, {agg['gp']} GP"
+                    )
+                return "\n".join(out) + "\n"
+
+            fwd_text = await top_forwards(forwards)
+            def_text = await top_defense(defense)
 
             goalie_ranked = sorted(
                 goalie_agg.items(),
@@ -746,7 +774,7 @@ class LeagueCog(commands.Cog):
                     player = await session.get(Player, player_id)
                     svp = (agg["saves"] / agg["shots_against"]) if agg["shots_against"] else 0.0
                     gaa = (agg["goals_against"] / (agg["minutes"] / 60)) if agg["minutes"] else 0.0
-                    g_out.append(f"`{i}` **{player.gamertag}** — {agg['wins']}-{agg['gp']-agg['wins']}, {svp:.3f} SV%, {gaa:.2f} GAA, {agg['gp']} GP")
+                    g_out.append(f"`{i}` **{player.gamertag}** — {agg['wins']}-{agg['gp']-agg['wins']}, {svp:.3f} SV%, {gaa:.2f} GAA, {agg['saves']} SV, {agg['gp']} GP")
                 goalie_text = "\n".join(g_out)
             else:
                 goalie_text = f"**GOALIES**\nNo goalie games in the last {games} games."
