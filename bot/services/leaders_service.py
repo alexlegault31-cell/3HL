@@ -74,15 +74,22 @@ async def points_leaders(session: AsyncSession, season_id: int, limit: int = 10)
 
 
 async def goalie_leaders(session: AsyncSession, season_id: int, limit: int = 10) -> list[LeaderRow]:
-    """Ranked by save %, min `MIN_GOALIE_GAMES` GP to qualify."""
+    """Ranked by save %, min `MIN_GOALIE_GAMES` GP to qualify.
+
+    Qualifies on real recorded goalie activity (shots_against > 0)
+    rather than Player.is_goalie -- that flag reflects whichever role a
+    player most recently played and gets overwritten on every import, so
+    it doesn't reliably indicate whether they actually have goalie stats
+    this season. shots_against is only ever incremented by real goalie
+    games, so it's a trustworthy signal regardless of that flag.
+    """
     stmt = (
         select(PlayerSeason, Player, Team)
         .join(Player, Player.id == PlayerSeason.player_id)
         .outerjoin(Team, Team.id == PlayerSeason.team_id)
         .where(
             PlayerSeason.season_id == season_id,
-            Player.is_goalie.is_(True),
-            PlayerSeason.games_played >= MIN_GOALIE_GAMES,
+            PlayerSeason.shots_against > 0,
         )
     )
     rows = (await session.execute(stmt)).all()
@@ -187,15 +194,22 @@ async def gaa_leaders(session: AsyncSession, season_id: int, limit: int = 10) ->
     """Ranked by lowest GAA (goals against average), min `MIN_GOALIE_GAMES`
     GP to qualify. Kept separate from goalie_leaders (which ranks by save
     %) since the best GAA and best save % don't always belong to the same
-    goalie."""
+    goalie.
+
+    Qualifies on real recorded goalie activity (shots_against > 0)
+    rather than Player.is_goalie -- see goalie_leaders for why. Without
+    this, a player whose most recent game happened to be a one-off
+    goalie appearance (or none at all) could show up with a misleading
+    0.000 GAA from having zero real minutes played, rather than being
+    correctly excluded.
+    """
     stmt = (
         select(PlayerSeason, Player, Team)
         .join(Player, Player.id == PlayerSeason.player_id)
         .outerjoin(Team, Team.id == PlayerSeason.team_id)
         .where(
             PlayerSeason.season_id == season_id,
-            Player.is_goalie.is_(True),
-            PlayerSeason.games_played >= MIN_GOALIE_GAMES,
+            PlayerSeason.shots_against > 0,
         )
     )
     rows = (await session.execute(stmt)).all()
@@ -208,11 +222,15 @@ async def gaa_leaders(session: AsyncSession, season_id: int, limit: int = 10) ->
 
 
 async def shutouts_leaders(session: AsyncSession, season_id: int, limit: int = 10) -> list[LeaderRow]:
+    """Qualifies on real recorded goalie activity (shots_against > 0)
+    rather than Player.is_goalie -- a real shutout recorded earlier in
+    the season would otherwise be hidden if the player's most recent
+    game happened to be as a skater instead."""
     stmt = (
         select(PlayerSeason, Player, Team)
         .join(Player, Player.id == PlayerSeason.player_id)
         .outerjoin(Team, Team.id == PlayerSeason.team_id)
-        .where(PlayerSeason.season_id == season_id, Player.is_goalie.is_(True), PlayerSeason.shutouts > 0)
+        .where(PlayerSeason.season_id == season_id, PlayerSeason.shots_against > 0, PlayerSeason.shutouts > 0)
         .order_by(PlayerSeason.shutouts.desc())
         .limit(limit)
     )
