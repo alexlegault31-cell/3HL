@@ -1,0 +1,1978 @@
+"""
+Consolidated `/league` command tree: `/league season`, `/league club`,
+`/league player`, `/league list`, `/league admin`, `/league refresh`,
+`/league schedule`, plus top-level `/league postpone-game`,
+`/league admin generate-playoffs`, `/league admin advance-round`.
+"""
+from __future__ import annotations
+
+import datetime as dt
+
+import difflib
+import logging
+
+import discord
+from discord import app_commands
+from discord.ext import commands
+from sqlalchemy import delete, func, or_, select
+
+from bot.cogs.channel_updater import refresh_all_channels
+from bot.config import settings
+from bot.database import get_session
+from bot.graphics.combined_leaders_board import render_combined_leaders_board
+from bot.graphics.game_recap_graphic import render_game_recap
+from bot.graphics.game_result_graphic import render_game_result
+from bot.graphics.player_card import render_player_card
+from bot.graphics.playoff_bracket import render_playoff_bracket
+from bot.graphics.schedule_graphic import render_schedule
+from bot.graphics.standings_graphic import render_standings
+from bot.graphics.team_card import render_team_card
+from bot.models import (
+    CapturedMatch,
+    Forfeit,
+    Game,
+    GoalieGameStat,
+    GuildSetting,
+    Player,
+    PlayerGameStat,
+    PlayerSeason,
+    PlayerTeamLink,
+    PlayoffSeries,
+    ScheduleGame,
+    Season,
+    StandingsEntry,
+    Team,
+    TeamGameStat,
+    TeamSeason,
+    User,
+)
+from bot.models.schedule import ScheduleStatus
+from bot.services.game_log_service import get_goalie_game_log, get_skater_game_log, get_team_playoff_record, get_team_recent_results
+from bot.services.github_publish_service import publish_to_website
+from bot.services.website_export_service import gather_export_data
+from bot.services.roster_service import get_team_roster
+from bot.services.unlinked_players_service import find_unlinked_players_in_game
+from bot.ui.schedule_view import ScheduleButtonView
+from bot.ui.season_picker_view import SeasonPickerView
+from bot.ui.team_picker_view import TeamPickerView
+from bot.services.leaders_service import (
+    LeaderRow,
+    assists_leaders,
+    blocked_shots_leaders,
+    faceoff_pct_leaders,
+    gaa_leaders,
+    goalie_leaders,
+    goals_leaders,
+    hits_leaders,
+    interceptions_leaders,
+    pim_leaders,
+    points_leaders,
+    shutouts_leaders,
+    takeaways_leaders,
+)
+from bot.services.league_settings import (
+    get_league_background_url,
+    get_league_logo_url,
+    get_schedule_first_week_pattern,
+    get_schedule_pattern,
+    set_league_background_url,
+    set_schedule_first_week_pattern,
+    set_schedule_pattern,
+)
+from bot.services.playoff_service import PlayoffError, advance_round, generate_bracket, get_bracket, record_series_result
+from bot.services.recap_generator import RecapContext, format_top_performers, generate_recap
+from bot.services.schedule_generator import generate_round_robin
+from bot.services.season_service import SeasonNotFound, get_active_season, resolve_season, set_active_season
+from bot.services.stat_importer import ImportError_, apply_team_season_delta, find_pending_schedule_for_matchup, import_game, reverse_game
+from bot.services.standings_service import recompute_standings
+from bot.utils.checks import commissioner_only, gm_only
+from bot.utils.embeds import error_embed, info_embed, success_embed
+
+
+async def team_name_autocomplete(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
+    """Shared autocomplete for every club-name text field -- Discord shows
+    this as a live filtered dropdown as the user types, built from
+    whatever clubs actually exist in the league rather than a fixed list.
+    Module-level (not a class method) since it needs to be fully defined
+    before any command in the class below references it in a decorator."""
+    async with get_session() as session:
+        stmt = select(Team.name).where(Team.is_active.is_(True))
+        if current:
+            stmt = stmt.where(Team.name.ilike(f"%{current}%"))
+        stmt = stmt.order_by(Team.name).limit(25)
+        names = (await session.execute(stmt)).scalars().all()
+    return [app_commands.Choice(name=n, value=n) for n in names]
+
+
+async def player_gamertag_autocomplete(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
+    """Shared autocomplete for existing-player gamertag text fields (NOT
+    used for /league player add, since that command is for typing a
+    brand-new player's name)."""
+    async with get_session() as session:
+        stmt = select(Player.gamertag)
+        if current:
+            stmt = stmt.where(Player.gamertag.ilike(f"%{current}%"))
+        stmt = stmt.order_by(Player.gamertag).limit(25)
+        names = (await session.execute(stmt)).scalars().all()
+    return [app_commands.Choice(name=n, value=n) for n in names]
+
+
+log = logging.getLogger(__name__)
+
+
+class LeagueCog(commands.Cog):
+    def __init__(self, bot: commands.Bot):
+        self.bot = bot
+
+    league_group = app_commands.Group(name="league", description="League management")
+
+    season_group = app_commands.Group(name="season", description="Season management", parent=league_group)
+    club_group = app_commands.Group(name="club", description="Club/team management", parent=league_group)
+    player_group = app_commands.Group(name="player", description="Player management", parent=league_group)
+    list_group = app_commands.Group(name="list", description="League directories & leaders", parent=league_group)
+    admin_group = app_commands.Group(name="admin", description="Commissioner administration", parent=league_group)
+    refresh_group = app_commands.Group(name="refresh", description="Manually re-post league graphics", parent=league_group)
+    schedule_group = app_commands.Group(name="schedule", description="League schedule", parent=league_group)
+
+    # ==================================================================
+    # /league season
+    # ==================================================================
+
+    @season_group.command(name="create-new", description="Create a new league season")
+    @app_commands.describe(number="Season number, e.g. 3", name="Display name, defaults to 'Season N'")
+    @commissioner_only()
+    async def season_create(self, interaction: discord.Interaction, number: int, name: str | None = None):
+        async with get_session() as session:
+            existing = await session.scalar(select(Season).where(Season.number == number))
+            if existing:
+                await interaction.response.send_message(embed=error_embed("Season exists", f"Season {number} already exists."), ephemeral=True)
+                return
+            season = Season(number=number, name=name or f"Season {number}")
+            session.add(season)
+        await interaction.response.send_message(embed=success_embed("Season created", f"**{season.name}** has been created."))
+
+    @season_group.command(name="start", description="Activate a season as the current league season")
+    @app_commands.describe(number="Season number to activate")
+    @commissioner_only()
+    async def season_start(self, interaction: discord.Interaction, number: int):
+        async with get_session() as session:
+            try:
+                season = await set_active_season(session, number)
+            except SeasonNotFound as e:
+                await interaction.response.send_message(embed=error_embed("Not found", str(e)), ephemeral=True)
+                return
+        await interaction.response.send_message(embed=success_embed("Season started", f"**{season.name}** is now the active season."))
+
+    @season_group.command(name="rename", description="Rename a season")
+    @app_commands.describe(number="Season number", new_name="New display name")
+    @commissioner_only()
+    async def season_rename(self, interaction: discord.Interaction, number: int, new_name: str):
+        async with get_session() as session:
+            season = await session.scalar(select(Season).where(Season.number == number))
+            if not season:
+                await interaction.response.send_message(embed=error_embed("Not found", f"Season {number} doesn't exist."), ephemeral=True)
+                return
+            old_name = season.name
+            season.name = new_name
+        await interaction.response.send_message(embed=success_embed("Season renamed", f"**{old_name}** → **{new_name}**"))
+
+    @season_group.command(name="settings", description="View or update season settings")
+    @app_commands.describe(number="Season number (defaults to active)", playoffs_active="Set whether playoffs are active for this season")
+    @commissioner_only()
+    async def season_settings(self, interaction: discord.Interaction, number: int | None = None, playoffs_active: bool | None = None):
+        async with get_session() as session:
+            try:
+                season = await resolve_season(session, number)
+            except SeasonNotFound as e:
+                await interaction.response.send_message(embed=error_embed("Season error", str(e)), ephemeral=True)
+                return
+            if playoffs_active is not None:
+                season.is_playoffs_active = playoffs_active
+            embed = info_embed(
+                f"Settings — {season.name}",
+                f"Active: {'Yes' if season.is_active else 'No'}\n"
+                f"Playoffs active: {'Yes' if season.is_playoffs_active else 'No'}\n"
+                f"Start date: {season.start_date or '—'}\n"
+                f"End date: {season.end_date or '—'}",
+            )
+        await interaction.response.send_message(embed=embed)
+
+    @season_group.command(name="wipe", description="PERMANENTLY delete a season and everything tied to it (games, stats, standings, schedule, playoffs)")
+    @app_commands.describe(number="Season number to wipe", confirm="Type the season's exact name to confirm -- this cannot be undone")
+    @commissioner_only()
+    async def season_wipe(self, interaction: discord.Interaction, number: int, confirm: str):
+        async with get_session() as session:
+            season = await session.scalar(select(Season).where(Season.number == number))
+            if season is None:
+                await interaction.response.send_message(embed=error_embed("Not found", f"No season numbered {number}."), ephemeral=True)
+                return
+
+            if confirm.strip().lower() != season.name.strip().lower():
+                await interaction.response.send_message(
+                    embed=error_embed(
+                        "Confirmation didn't match",
+                        f"Type the season's exact name (`{season.name}`) in the `confirm` field to proceed. Nothing was deleted.",
+                    ),
+                    ephemeral=True,
+                )
+                return
+
+            season_id = season.id
+            season_name = season.name
+            # Explicit deletes in dependency order rather than relying on
+            # DB-level cascade -- safer and doesn't depend on assuming
+            # every foreign key was set up with ON DELETE CASCADE.
+            await session.execute(delete(PlayerGameStat).where(PlayerGameStat.season_id == season_id))
+            await session.execute(delete(GoalieGameStat).where(GoalieGameStat.season_id == season_id))
+            await session.execute(delete(TeamGameStat).where(TeamGameStat.season_id == season_id))
+            await session.execute(delete(Game).where(Game.season_id == season_id))
+            await session.execute(delete(PlayoffSeries).where(PlayoffSeries.season_id == season_id))
+            await session.execute(delete(ScheduleGame).where(ScheduleGame.season_id == season_id))
+            await session.execute(delete(StandingsEntry).where(StandingsEntry.season_id == season_id))
+            await session.execute(delete(TeamSeason).where(TeamSeason.season_id == season_id))
+            await session.execute(delete(PlayerSeason).where(PlayerSeason.season_id == season_id))
+            await session.delete(season)
+
+        await interaction.response.send_message(
+            embed=success_embed("Season wiped", f"**{season_name}** and all of its games, stats, standings, schedule, and playoff data have been permanently deleted.")
+        )
+
+    # ==================================================================
+    # /league club
+    # ==================================================================
+
+    @club_group.command(name="add", description="Add a new club to the league")
+    @app_commands.describe(name="Club name, e.g. Italy", abbreviation="3-4 letter abbreviation")
+    @commissioner_only()
+    async def club_add(self, interaction: discord.Interaction, name: str, abbreviation: str | None = None):
+        async with get_session() as session:
+            existing = await session.scalar(select(Team).where(Team.name == name))
+            if existing:
+                await interaction.response.send_message(embed=error_embed("Club exists", f"**{name}** already exists."), ephemeral=True)
+                return
+            team = Team(name=name, abbreviation=abbreviation)
+            session.add(team)
+            await session.flush()
+            try:
+                season = await resolve_season(session, None)
+                session.add(TeamSeason(team_id=team.id, season_id=season.id))
+            except SeasonNotFound:
+                pass
+        await interaction.response.send_message(embed=success_embed("Club added", f"**{name}** has been added to the league."))
+
+    @club_group.command(name="remove", description="Remove a club from the league (soft-delete, preserves history)")
+    @app_commands.describe(name="Club name to remove")
+    @app_commands.autocomplete(name=team_name_autocomplete)
+    @commissioner_only()
+    async def club_remove(self, interaction: discord.Interaction, name: str):
+        await interaction.response.defer(ephemeral=True)
+        async with get_session() as session:
+            team = await session.scalar(select(Team).where(Team.name.ilike(name)))
+            if not team:
+                await interaction.followup.send(embed=error_embed("Unknown club", f"No club named **{name}**."))
+                return
+            team.is_active = False
+            try:
+                s = await get_active_season(session)
+                await recompute_standings(session, s.id)
+                await self._refresh_everything(interaction, session)
+            except SeasonNotFound:
+                pass  # no active season -- nothing to refresh
+        await interaction.followup.send(embed=success_embed("Club removed", f"**{name}** has been deactivated. Historical stats/games are preserved."))
+
+    @club_group.command(name="swap", description="Change a club's linked EASHL Club ID")
+    @app_commands.describe(name="Club name", new_club_id="New EASHL Club ID", season="Season number (defaults to active)")
+    @app_commands.autocomplete(name=team_name_autocomplete)
+    @commissioner_only()
+    async def club_swap(self, interaction: discord.Interaction, name: str, new_club_id: int, season: int | None = None):
+        await interaction.response.defer()
+        async with get_session() as session:
+            team = await session.scalar(select(Team).where(Team.name.ilike(name)))
+            if not team:
+                await interaction.followup.send(embed=error_embed("Unknown club", f"No club named **{name}**."))
+                return
+            try:
+                s = await resolve_season(session, season)
+            except SeasonNotFound as e:
+                await interaction.followup.send(embed=error_embed("Season error", str(e)))
+                return
+            ts = await session.scalar(select(TeamSeason).where(TeamSeason.team_id == team.id, TeamSeason.season_id == s.id))
+            if ts is None:
+                ts = TeamSeason(team_id=team.id, season_id=s.id)
+                session.add(ts)
+            old_id = ts.club_id
+            ts.club_id = new_club_id
+            await recompute_standings(session, s.id)
+            await self._refresh_everything(interaction, session)
+        await interaction.followup.send(
+            embed=success_embed("Club ID updated", f"**{name}** Club ID changed from `{old_id or '—'}` to `{new_club_id}` for {s.name}.")
+        )
+
+    @club_group.command(name="add-logo", description="Set a club's logo")
+    @app_commands.describe(name="Club name", logo_url="Direct image URL for the logo")
+    @app_commands.autocomplete(name=team_name_autocomplete)
+    @commissioner_only()
+    async def club_add_logo(self, interaction: discord.Interaction, name: str, logo_url: str):
+        async with get_session() as session:
+            team = await session.scalar(select(Team).where(Team.name.ilike(name)))
+            if not team:
+                await interaction.response.send_message(embed=error_embed("Unknown club", f"No club named **{name}**."), ephemeral=True)
+                return
+            team.logo_url = logo_url
+        await interaction.response.send_message(embed=success_embed("Logo updated", f"Logo set for **{name}**."))
+
+    @club_group.command(name="rename", description="Rename a team - keeps all its existing stats and history intact")
+    @app_commands.describe(current_name="The team's current name", new_name="The new name to change it to")
+    @app_commands.autocomplete(current_name=team_name_autocomplete)
+    @commissioner_only()
+    async def club_rename(self, interaction: discord.Interaction, current_name: str, new_name: str):
+        async with get_session() as session:
+            team = await session.scalar(select(Team).where(Team.name.ilike(current_name)))
+            if not team:
+                await interaction.response.send_message(embed=error_embed("Unknown club", f"No club named **{current_name}**."), ephemeral=True)
+                return
+
+            collision = await session.scalar(select(Team).where(Team.name.ilike(new_name)))
+            if collision and collision.id != team.id:
+                await interaction.response.send_message(embed=error_embed("Name taken", f"A different club is already named **{new_name}**."), ephemeral=True)
+                return
+
+            old_name = team.name
+            team.name = new_name
+
+        await interaction.response.send_message(
+            embed=success_embed("Club renamed", f"**{old_name}** is now **{new_name}**. All existing stats, standings, and history carry over -- nothing is reset.")
+        )
+
+    @club_group.command(name="set-code", description="Set the join code this team's home games use")
+    @app_commands.describe(name="Club name", code="The lobby/game code opponents use to join when this team is home")
+    @app_commands.autocomplete(name=team_name_autocomplete)
+    @commissioner_only()
+    async def club_set_code(self, interaction: discord.Interaction, name: str, code: str):
+        async with get_session() as session:
+            team = await session.scalar(select(Team).where(Team.name.ilike(name)))
+            if not team:
+                await interaction.response.send_message(embed=error_embed("Unknown club", f"No club named **{name}**."), ephemeral=True)
+                return
+            team.game_code = code
+        await interaction.response.send_message(embed=success_embed("Game code set", f"**{team.name}**'s home game code is now `{code}`."))
+
+    @club_group.command(name="stats", description="View a club's record for a season")
+    @app_commands.describe(
+        name="Club name (optional -- leave blank to pick a season, then a team, from a list)",
+        season="Season number (optional -- also skippable via the picker)",
+    )
+    @app_commands.autocomplete(name=team_name_autocomplete)
+    async def club_stats(self, interaction: discord.Interaction, name: str | None = None, season: int | None = None):
+        async with get_session() as session:
+            if name is not None:
+                team = await session.scalar(select(Team).where(Team.name.ilike(name)))
+                if not team:
+                    await interaction.response.send_message(embed=error_embed("Unknown club", f"No club named **{name}**."), ephemeral=True)
+                    return
+
+                if season is not None:
+                    await interaction.response.defer()
+                    try:
+                        s = await resolve_season(session, season)
+                    except SeasonNotFound as e:
+                        await interaction.followup.send(embed=error_embed("Season error", str(e)))
+                        return
+                    await self._send_club_stats_card(interaction, team.id, s.id, use_followup=True)
+                    return
+
+                seasons = (await session.execute(select(Season).order_by(Season.number.desc()))).scalars().all()
+                if not seasons:
+                    await interaction.response.send_message(embed=error_embed("No seasons", "No seasons have been created yet."), ephemeral=True)
+                    return
+                if len(seasons) == 1:
+                    await interaction.response.defer()
+                    await self._send_club_stats_card(interaction, team.id, seasons[0].id, use_followup=True)
+                    return
+
+                team_id = team.id
+
+                async def on_select(select_interaction: discord.Interaction, season_id: int) -> None:
+                    await select_interaction.response.defer()
+                    await self._send_club_stats_card(select_interaction, team_id, season_id, use_followup=True)
+
+                view = SeasonPickerView(seasons, on_select)
+                await interaction.response.send_message("Which season would you like to see?", view=view, ephemeral=True)
+                return
+
+            # No team name given -- season-first flow. This is what makes
+            # legacy/inactive teams reachable at all: the autocomplete on
+            # `name` only shows currently-active teams, but a team picker
+            # built from TeamSeason (actual participation in that season)
+            # correctly includes teams that only ever existed in a past season.
+            if season is not None:
+                try:
+                    s = await resolve_season(session, season)
+                except SeasonNotFound as e:
+                    await interaction.response.send_message(embed=error_embed("Season error", str(e)), ephemeral=True)
+                    return
+                await interaction.response.defer(ephemeral=True)
+                await self._show_team_picker_for_season(interaction, s.id, use_followup=True)
+                return
+
+            seasons = (await session.execute(select(Season).order_by(Season.number.desc()))).scalars().all()
+            if not seasons:
+                await interaction.response.send_message(embed=error_embed("No seasons", "No seasons have been created yet."), ephemeral=True)
+                return
+
+            async def on_season_select(select_interaction: discord.Interaction, season_id: int) -> None:
+                await select_interaction.response.defer()
+                await self._show_team_picker_for_season(select_interaction, season_id, use_followup=True)
+
+            if len(seasons) == 1:
+                await interaction.response.defer(ephemeral=True)
+                await self._show_team_picker_for_season(interaction, seasons[0].id, use_followup=True)
+                return
+
+            view = SeasonPickerView(seasons, on_season_select)
+            await interaction.response.send_message("Which season would you like to see?", view=view, ephemeral=True)
+
+    async def _show_team_picker_for_season(self, interaction: discord.Interaction, season_id: int, use_followup: bool) -> None:
+        async with get_session() as session:
+            season = await session.get(Season, season_id)
+            teams = (
+                await session.execute(
+                    select(Team).join(TeamSeason, TeamSeason.team_id == Team.id).where(TeamSeason.season_id == season_id).order_by(Team.name)
+                )
+            ).scalars().all()
+
+        send = interaction.followup.send if use_followup else interaction.response.send_message
+        if not teams:
+            await send(embed=error_embed("No teams", f"No teams found for {season.name}."), ephemeral=True)
+            return
+        if len(teams) == 1:
+            await self._send_club_stats_card(interaction, teams[0].id, season_id, use_followup=True)
+            return
+
+        async def on_team_select(select_interaction: discord.Interaction, team_id: int) -> None:
+            await select_interaction.response.defer()
+            await self._send_club_stats_card(select_interaction, team_id, season_id, use_followup=True)
+
+        view = TeamPickerView(teams, on_team_select)
+        await send(f"Which team from {season.name} would you like to see?", view=view, ephemeral=True)
+
+    async def _send_club_stats_card(self, interaction: discord.Interaction, team_id: int, season_id: int, use_followup: bool) -> None:
+        async with get_session() as session:
+            team = await session.get(Team, team_id)
+            s = await session.get(Season, season_id)
+
+            ts = await session.scalar(select(TeamSeason).where(TeamSeason.team_id == team.id, TeamSeason.season_id == s.id))
+            if ts is None:
+                ts = TeamSeason(
+                    team_id=team.id, season_id=s.id, club_id=None,
+                    wins=0, losses=0, ot_losses=0, points=0,
+                    goals_for=0, goals_against=0,
+                    streak_type=None, streak_count=0, last_10=None,
+                )
+
+            top_scorers = await goals_leaders(session, s.id, limit=50)
+            top_pts = await points_leaders(session, s.id, limit=50)
+            team_top_pts = next((r for r in top_pts if r.team and r.team.id == team.id), None)
+            team_top_scorer = next((r for r in top_scorers if r.team and r.team.id == team.id), None)
+            lines = []
+            if team_top_pts:
+                lines.append(f"{team_top_pts.player.gamertag} — {team_top_pts.value} pts")
+            if team_top_scorer and (not team_top_pts or team_top_scorer.player.id != team_top_pts.player.id):
+                lines.append(f"{team_top_scorer.player.gamertag} — {team_top_scorer.value} goals")
+
+            league_logo_url = await get_league_logo_url(session, interaction.guild_id)
+            background_url = await get_league_background_url(session, interaction.guild_id)
+            recent_results = await get_team_recent_results(session, team.id, s.id, limit=15)
+            playoff_record = await get_team_playoff_record(session, team.id, s.id)
+            skaters, goalies = await get_team_roster(session, team.id, s.id)
+            path = await render_team_card(team, ts, s.name, lines, league_logo_url, background_url, recent_results, skaters, goalies, playoff_record)
+
+        send = interaction.followup.send if use_followup else interaction.response.send_message
+        await send(file=discord.File(path))
+
+    # ==================================================================
+    # /league player
+    # ==================================================================
+
+    @player_group.command(name="stats", description="View a player's season stats card")
+    @app_commands.describe(
+        discord_user="Pick a Discord member (uses their linked EA gamertag) -- defaults to you",
+        gamertag="Or type an EA gamertag directly, if they haven't linked their account",
+        season="Season number (skips the season picker if given)",
+    )
+    async def player_stats(
+        self,
+        interaction: discord.Interaction,
+        discord_user: discord.Member | None = None,
+        gamertag: str | None = None,
+        season: int | None = None,
+    ):
+        async with get_session() as session:
+            player = await self._resolve_player(session, interaction, gamertag, discord_user)
+            if player is None:
+                who = discord_user.mention if discord_user else "That account"
+                await interaction.response.send_message(
+                    embed=error_embed(
+                        "No player found",
+                        f"{who} hasn't linked an EA gamertag yet -- use `/league player link` first, or provide a gamertag directly.",
+                    ),
+                    ephemeral=True,
+                )
+                return
+            player_id = player.id
+
+            if season is not None:
+                await interaction.response.defer()
+                try:
+                    s = await resolve_season(session, season)
+                except SeasonNotFound as e:
+                    await interaction.followup.send(embed=error_embed("Season error", str(e)))
+                    return
+                await self._send_player_stats_card(interaction, player_id, s.id, use_followup=True)
+                return
+
+            seasons = (await session.execute(select(Season).order_by(Season.number.desc()))).scalars().all()
+            if not seasons:
+                await interaction.response.send_message(embed=error_embed("No seasons", "No seasons have been created yet."), ephemeral=True)
+                return
+            if len(seasons) == 1:
+                await interaction.response.defer()
+                await self._send_player_stats_card(interaction, player_id, seasons[0].id, use_followup=True)
+                return
+
+            async def on_select(select_interaction: discord.Interaction, season_id: int) -> None:
+                await select_interaction.response.defer()
+                await self._send_player_stats_card(select_interaction, player_id, season_id, use_followup=True)
+
+            view = SeasonPickerView(seasons, on_select)
+            await interaction.response.send_message("Which season would you like to see?", view=view, ephemeral=True)
+
+    async def _send_player_stats_card(self, interaction: discord.Interaction, player_id: int, season_id: int, use_followup: bool) -> None:
+        async with get_session() as session:
+            player = await session.get(Player, player_id)
+            s = await session.get(Season, season_id)
+
+            ps = await session.scalar(select(PlayerSeason).where(PlayerSeason.player_id == player.id, PlayerSeason.season_id == s.id))
+            team = None
+            if ps is None:
+                ps = PlayerSeason(
+                    player_id=player.id, season_id=s.id, team_id=None,
+                    games_played=0, goals=0, assists=0, points=0, plus_minus=0,
+                    hits=0, pim=0, shots=0, ppg=0,
+                    faceoffs_won=0, faceoffs_lost=0, takeaways=0, interceptions=0,
+                    blocked_shots=0, giveaways=0, pass_attempts=0, passes_completed=0,
+                    wins=0, losses=0, ot_losses=0, shots_against=0, saves=0,
+                    goals_against=0, shutouts=0, minutes_played=0.0,
+                )
+            else:
+                team = await session.get(Team, ps.team_id) if ps.team_id else None
+
+            skater_game_log = await get_skater_game_log(session, player.id, s.id)
+            goalie_game_log = await get_goalie_game_log(session, player.id, s.id)
+
+            league_logo_url = await get_league_logo_url(session, interaction.guild_id)
+            background_url = await get_league_background_url(session, interaction.guild_id)
+            path = await render_player_card(player, ps, team, s.name, league_logo_url, background_url, skater_game_log, goalie_game_log)
+
+        send = interaction.followup.send if use_followup else interaction.response.send_message
+        await send(file=discord.File(path))
+
+    @player_group.command(name="link", description="Link your Discord account to your EA gamertag")
+    @app_commands.describe(gamertag="Your EA gamertag", confirm="Set true to confirm creating a brand-new player if a similar name already exists")
+    async def player_link(self, interaction: discord.Interaction, gamertag: str, confirm: bool = False):
+        gamertag = " ".join(gamertag.split())  # trims leading/trailing spaces and collapses any double-spaces -- a stray space would otherwise silently create a second, unlinked Player record for what looks like the same name
+        async with get_session() as session:
+            player = await session.scalar(select(Player).where(Player.gamertag.ilike(gamertag)))
+
+            if player is None:
+                # No exact match. If something close already exists, this
+                # is more likely a typo of a real player than a genuinely
+                # new one -- ask for explicit confirmation before creating
+                # a duplicate Player row for what might be the same person.
+                all_gamertags = (await session.execute(select(Player.gamertag))).scalars().all()
+                suggestions = difflib.get_close_matches(gamertag, all_gamertags, n=3, cutoff=0.6)
+                if suggestions and not confirm:
+                    suggestion_text = ", ".join(f"**{s}**" for s in suggestions)
+                    await interaction.response.send_message(
+                        embed=error_embed(
+                            "Similar name found",
+                            f"No player named exactly **{gamertag}** exists, but found: {suggestion_text}. "
+                            f"If one of those is you, use that exact spelling. If you're sure **{gamertag}** is a "
+                            f"different, genuinely new player, run this again with `confirm:True`.",
+                        ),
+                        ephemeral=True,
+                    )
+                    return
+                # Pre-registers this gamertag before they've played a
+                # single game. is_goalie is an unconfirmed guess (False)
+                # until their first real game import corrects it
+                # automatically from EA's actual data.
+                player = Player(gamertag=gamertag, is_goalie=False)
+                session.add(player)
+                await session.flush()
+
+            existing_user = await session.scalar(select(User).where(User.discord_id == interaction.user.id))
+            if existing_user is None:
+                session.add(User(discord_id=interaction.user.id, discord_username=str(interaction.user), player_id=player.id))
+            else:
+                existing_user.player_id = player.id
+
+        await interaction.response.send_message(
+            embed=success_embed("Linked", f"Your Discord account is now linked to **{gamertag}**. Anyone can now pick you in `/league player stats` and it'll pull your stats automatically."),
+            ephemeral=True,
+        )
+
+    # ==================================================================
+    # /league list
+    # ==================================================================
+
+    @list_group.command(name="list_clubs", description="List all clubs in the league")
+    async def list_clubs(self, interaction: discord.Interaction):
+        async with get_session() as session:
+            teams = (await session.execute(select(Team).where(Team.is_active.is_(True)).order_by(Team.name))).scalars().all()
+            if not teams:
+                await interaction.response.send_message(embed=info_embed("No clubs", "No clubs have been added yet."))
+                return
+            lines = [f"• **{t.name}**" + (f" ({t.abbreviation})" if t.abbreviation else "") for t in teams]
+        await interaction.response.send_message(embed=info_embed("League Clubs", "\n".join(lines)))
+
+    @list_group.command(name="linked-players", description="List every player who has linked their Discord to an EA gamertag")
+    @commissioner_only()
+    async def list_linked_players(self, interaction: discord.Interaction):
+        async with get_session() as session:
+            users = (await session.execute(select(User).where(User.player_id.is_not(None)))).scalars().all()
+            if not users:
+                await interaction.response.send_message(embed=info_embed("No links", "No players have linked their Discord account yet."), ephemeral=True)
+                return
+
+            lines = []
+            for u in users:
+                player = await session.get(Player, u.player_id)
+                gamertag = player.gamertag if player else "Unknown"
+                lines.append(f"• <@{u.discord_id}> — **{gamertag}**")
+
+            # Discord embed descriptions cap at 4096 characters -- chunk
+            # into multiple embeds (one message can hold up to 10) so a
+            # league with many linked players never gets silently cut off.
+            chunks: list[str] = []
+            current = ""
+            for line in lines:
+                candidate = f"{current}\n{line}" if current else line
+                if len(candidate) > 3800:
+                    chunks.append(current)
+                    current = line
+                else:
+                    current = candidate
+            if current:
+                chunks.append(current)
+
+            embeds = [
+                info_embed(f"Linked Players ({len(users)})" if i == 0 else "Linked Players (cont.)", chunk)
+                for i, chunk in enumerate(chunks[:10])
+            ]
+            await interaction.response.send_message(embeds=embeds, ephemeral=True)
+
+    @list_group.command(name="potw-candidates", description="Top Player of the Week candidates over the last N games, split by Forward/Defense/Goalie")
+    @app_commands.describe(games="Number of most recent games to consider", season="Season number (defaults to active)")
+    async def list_potw_candidates(self, interaction: discord.Interaction, games: int = 5, season: int | None = None):
+        await interaction.response.defer()
+        async with get_session() as session:
+            try:
+                s = await resolve_season(session, season)
+            except SeasonNotFound as e:
+                await interaction.followup.send(embed=error_embed("Season error", str(e)))
+                return
+
+            recent_game_ids = (
+                await session.execute(select(Game.id).where(Game.season_id == s.id).order_by(Game.id.desc()).limit(games))
+            ).scalars().all()
+            if not recent_game_ids:
+                await interaction.followup.send(embed=info_embed("No games", f"No games played yet in {s.name}."))
+                return
+
+            skater_lines = (await session.execute(select(PlayerGameStat).where(PlayerGameStat.game_id.in_(recent_game_ids)))).scalars().all()
+            goalie_lines = (await session.execute(select(GoalieGameStat).where(GoalieGameStat.game_id.in_(recent_game_ids)))).scalars().all()
+
+            skater_agg: dict[int, dict] = {}
+            for line in skater_lines:
+                agg = skater_agg.setdefault(line.player_id, {"gp": 0, "goals": 0, "assists": 0, "points": 0, "plus_minus": 0, "hits": 0, "positions": []})
+                agg["gp"] += 1
+                agg["goals"] += line.goals
+                agg["assists"] += line.assists
+                agg["points"] += line.points
+                agg["plus_minus"] += line.plus_minus
+                agg["hits"] += line.hits
+                if line.position:
+                    agg["positions"].append(line.position.upper())
+
+            forwards, defense = [], []
+            for player_id, agg in skater_agg.items():
+                positions = agg["positions"]
+                most_common = max(set(positions), key=positions.count) if positions else "F"
+                (defense if most_common == "D" else forwards).append((player_id, agg))
+
+            goalie_agg: dict[int, dict] = {}
+            for line in goalie_lines:
+                agg = goalie_agg.setdefault(line.player_id, {"gp": 0, "wins": 0, "shots_against": 0, "saves": 0, "goals_against": 0, "minutes": 0.0})
+                agg["gp"] += 1
+                agg["wins"] += 1 if line.result == 1 else 0
+                agg["shots_against"] += line.shots_against
+                agg["saves"] += line.saves
+                agg["goals_against"] += line.goals_against
+                agg["minutes"] += line.minutes_played
+
+            async def top_skaters(pool: list, label: str) -> str:
+                ranked = sorted(pool, key=lambda kv: kv[1]["points"], reverse=True)[:5]
+                if not ranked:
+                    return f"**{label}**\nNo games from this position in the last {games} games.\n"
+                out = [f"**{label}**"]
+                for i, (player_id, agg) in enumerate(ranked, start=1):
+                    player = await session.get(Player, player_id)
+                    pm = f"+{agg['plus_minus']}" if agg["plus_minus"] > 0 else str(agg["plus_minus"])
+                    out.append(f"`{i}` **{player.gamertag}** — {agg['points']}pts ({agg['goals']}G {agg['assists']}A), {pm}, {agg['hits']} hits, {agg['gp']} GP")
+                return "\n".join(out) + "\n"
+
+            fwd_text = await top_skaters(forwards, "FORWARDS")
+            def_text = await top_skaters(defense, "DEFENSE")
+
+            goalie_ranked = sorted(
+                goalie_agg.items(),
+                key=lambda kv: (kv[1]["saves"] / kv[1]["shots_against"]) if kv[1]["shots_against"] else 0,
+                reverse=True,
+            )[:5]
+            if goalie_ranked:
+                g_out = ["**GOALIES**"]
+                for i, (player_id, agg) in enumerate(goalie_ranked, start=1):
+                    player = await session.get(Player, player_id)
+                    svp = (agg["saves"] / agg["shots_against"]) if agg["shots_against"] else 0.0
+                    gaa = (agg["goals_against"] / (agg["minutes"] / 60)) if agg["minutes"] else 0.0
+                    g_out.append(f"`{i}` **{player.gamertag}** — {agg['wins']}-{agg['gp']-agg['wins']}, {svp:.3f} SV%, {gaa:.2f} GAA, {agg['gp']} GP")
+                goalie_text = "\n".join(g_out)
+            else:
+                goalie_text = f"**GOALIES**\nNo goalie games in the last {games} games."
+
+            summary = f"{fwd_text}\n{def_text}\n{goalie_text}"
+
+        await interaction.followup.send(embed=info_embed(f"POTW Candidates — Last {games} Games ({s.name})", summary))
+
+    @list_group.command(name="recent-stat-leaders", description="Stat leaders over the last N games")
+    @app_commands.describe(games="Number of most recent games to consider", season="Season number (defaults to active)")
+    async def list_recent_leaders(self, interaction: discord.Interaction, games: int = 10, season: int | None = None):
+        await interaction.response.defer()
+        async with get_session() as session:
+            try:
+                s = await resolve_season(session, season)
+            except SeasonNotFound as e:
+                await interaction.followup.send(embed=error_embed("Season error", str(e)))
+                return
+
+            from bot.models import PlayerGameStat
+
+            recent_game_ids = (
+                await session.execute(select(Game.id).where(Game.season_id == s.id).order_by(Game.id.desc()).limit(games))
+            ).scalars().all()
+            if not recent_game_ids:
+                await interaction.followup.send(embed=info_embed("No games", f"No games played yet in {s.name}."))
+                return
+
+            stmt = select(PlayerGameStat).where(PlayerGameStat.game_id.in_(recent_game_ids))
+            lines_by_player: dict[int, dict] = {}
+            for line in (await session.execute(stmt)).scalars().all():
+                agg = lines_by_player.setdefault(line.player_id, {"goals": 0, "assists": 0, "points": 0})
+                agg["goals"] += line.goals
+                agg["assists"] += line.assists
+                agg["points"] += line.points
+
+            ranked = sorted(lines_by_player.items(), key=lambda kv: kv[1]["points"], reverse=True)[:10]
+            lines = []
+            for i, (player_id, agg) in enumerate(ranked, start=1):
+                player = await session.get(Player, player_id)
+                lines.append(f"`{i:>2}` **{player.gamertag}** — {agg['points']} pts ({agg['goals']}G {agg['assists']}A)")
+
+        await interaction.followup.send(embed=info_embed(f"Stat Leaders — Last {games} Games ({s.name})", "\n".join(lines)))
+
+    # ==================================================================
+    # /league admin
+    # ==================================================================
+
+    @admin_group.command(name="add-logo", description="Set the league's own logo")
+    @app_commands.describe(logo_url="Direct image URL for the league logo")
+    @commissioner_only()
+    async def admin_add_logo(self, interaction: discord.Interaction, logo_url: str):
+        async with get_session() as session:
+            setting = await session.scalar(
+                select(GuildSetting).where(GuildSetting.guild_id == interaction.guild_id, GuildSetting.key == "league_logo_url")
+            )
+            if setting is None:
+                session.add(GuildSetting(guild_id=interaction.guild_id, key="league_logo_url", value=logo_url))
+            else:
+                setting.value = logo_url
+        await interaction.response.send_message(embed=success_embed("League logo set", "Saved."))
+
+    @admin_group.command(name="add-background", description="Set a custom background photo used behind every graphic")
+    @app_commands.describe(image_url="Direct image URL for the background photo")
+    @commissioner_only()
+    async def admin_add_background(self, interaction: discord.Interaction, image_url: str):
+        async with get_session() as session:
+            await set_league_background_url(session, interaction.guild_id, image_url)
+        await interaction.response.send_message(
+            embed=success_embed("Background set", "Every graphic will now use this photo as its background. Use `/league admin remove-background` to revert to the default look at any time.")
+        )
+
+    @admin_group.command(name="remove-background", description="Remove the custom background photo, reverting to the default look")
+    @commissioner_only()
+    async def admin_remove_background(self, interaction: discord.Interaction):
+        async with get_session() as session:
+            await set_league_background_url(session, interaction.guild_id, None)
+        await interaction.response.send_message(embed=success_embed("Background removed", "Graphics have reverted to the default gradient look."))
+
+    @admin_group.command(name="settings", description="View current league bot configuration")
+    @commissioner_only()
+    async def admin_settings(self, interaction: discord.Interaction):
+        embed = info_embed(
+            "League Bot Settings",
+            f"Commissioner role: **{settings.role_commissioner}**\n"
+            f"GM role: **{settings.role_gm}**\n"
+            f"Game results channel: {'<#' + str(settings.channel_game_results) + '>' if settings.channel_game_results else '—'}\n"
+            f"Standings channel: {'<#' + str(settings.channel_standings) + '>' if settings.channel_standings else '—'}\n"
+            f"Stat leaders channel: {'<#' + str(settings.channel_stat_leaders) + '>' if settings.channel_stat_leaders else '—'}\n"
+            f"Schedule channel: {'<#' + str(settings.channel_schedule) + '>' if settings.channel_schedule else '—'}\n"
+            f"Awards channel: {'<#' + str(settings.channel_awards) + '>' if settings.channel_awards else '—'}\n\n"
+            f"*Channel/role settings are configured via environment variables on the hosting platform.*",
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @admin_group.command(name="submit-game", description="Import stats for a scheduled game from EA's Pro Clubs API")
+    @app_commands.describe(
+        schedule_game_number="The game number from /league schedule",
+        season="Season number (defaults to active)",
+        disable_auto_merge="Force-disable lagout auto-merge for this import (rare edge case override)",
+    )
+    @gm_only()
+    async def admin_submit_game(
+        self,
+        interaction: discord.Interaction,
+        schedule_game_number: int,
+        season: int | None = None,
+        disable_auto_merge: bool = False,
+    ):
+        await interaction.response.defer()
+        async with get_session() as session:
+            try:
+                s = await resolve_season(session, season)
+            except SeasonNotFound as e:
+                await interaction.followup.send(embed=error_embed("Season error", str(e)))
+                return
+            try:
+                result = await import_game(
+                    session,
+                    season_id=s.id,
+                    game_number=schedule_game_number,
+                    imported_by_discord_id=interaction.user.id,
+                    disable_auto_merge=disable_auto_merge,
+                )
+            except ImportError_ as e:
+                await interaction.followup.send(embed=error_embed("Couldn't import game", str(e)))
+                return
+
+            recap_text = await self._generate_and_attach_recap(session, result.game, result.home_team, result.away_team)
+            league_logo_url = await get_league_logo_url(session, interaction.guild_id)
+            background_url = await get_league_background_url(session, interaction.guild_id)
+            graphic_path = await render_game_result(result.game, result.home_team, result.away_team, league_logo_url, background_url)
+            result.game.result_graphic_path = graphic_path
+
+            # Build the detailed combined recap graphic: team-level stat
+            # lines + (Player, stat_line) pairs split by which team each
+            # player belongs to.
+            home_team_stat = await session.scalar(
+                select(TeamGameStat).where(TeamGameStat.game_id == result.game.id, TeamGameStat.team_id == result.home_team.id)
+            )
+            away_team_stat = await session.scalar(
+                select(TeamGameStat).where(TeamGameStat.game_id == result.game.id, TeamGameStat.team_id == result.away_team.id)
+            )
+            home_skaters, away_skaters = [], []
+            for line in result.player_lines:
+                player = await session.get(Player, line.player_id)
+                (home_skaters if line.team_id == result.home_team.id else away_skaters).append((player, line))
+            home_goalies, away_goalies = [], []
+            for line in result.goalie_lines:
+                player = await session.get(Player, line.player_id)
+                (home_goalies if line.team_id == result.home_team.id else away_goalies).append((player, line))
+
+            recap_graphic_path = await render_game_recap(
+                result.game, result.home_team, result.away_team,
+                home_team_stat, away_team_stat,
+                home_skaters, home_goalies, away_skaters, away_goalies,
+                league_logo_url, background_url,
+            )
+
+            series = await record_series_result(session, result.schedule, result.game)
+            series_status_text = None
+            if series is not None:
+                team_a = await session.get(Team, series.team_a_id)
+                team_b = await session.get(Team, series.team_b_id)
+                if series.winner_team_id is not None:
+                    winner = team_a if series.winner_team_id == series.team_a_id else team_b
+                    series_status_text = f"🏆 **{winner.name}** wins the {series.round_name} series {max(series.wins_a, series.wins_b)}-{min(series.wins_a, series.wins_b)}!"
+                else:
+                    series_status_text = f"{series.round_name}: **{team_a.name}** {series.wins_a} - {series.wins_b} **{team_b.name}**"
+
+            unlinked = await find_unlinked_players_in_game(session, result.game.id)
+
+            await self._refresh_everything(interaction, session)
+
+        embed = success_embed("Game imported", f"**{result.home_team.name} {result.game.home_score} - {result.game.away_score} {result.away_team.name}**")
+        if result.was_merged:
+            embed.add_field(
+                name="🔄 Lagout Auto-Merged",
+                value="Two close-together matches between these clubs were automatically combined into one game's stats.",
+                inline=False,
+            )
+        if recap_text:
+            embed.add_field(name="Recap", value=recap_text, inline=False)
+        if series_status_text:
+            embed.add_field(name="Playoff Series", value=series_status_text, inline=False)
+
+        # Post to the public results channel BEFORE adding unlinked-player
+        # info -- that's only relevant to whoever ran the command, not the
+        # whole server, so it must never end up in the public embed copy.
+        await self._post_to_results_channel(interaction, embed, graphic_path, recap_graphic_path)
+
+        if unlinked:
+            lines = "\n".join(f"• **{u.gamertag}**, played this game with {u.team_name}." for u in unlinked)
+            embed.add_field(name="⚠️ Unlinked Players Found", value=lines, inline=False)
+        await interaction.followup.send(embed=embed, files=[discord.File(graphic_path), discord.File(recap_graphic_path)])
+
+    @admin_group.command(name="set-record", description="Manually set a team's W-L-OTL-Points (for joining a league mid-season) -- touches nothing else")
+    @app_commands.describe(
+        name="Club name",
+        wins="Wins",
+        losses="Losses",
+        ot_losses="OT losses",
+        points="Points",
+    )
+    @app_commands.autocomplete(name=team_name_autocomplete)
+    @commissioner_only()
+    async def admin_set_record(
+        self,
+        interaction: discord.Interaction,
+        name: str,
+        wins: int,
+        losses: int,
+        ot_losses: int,
+        points: int,
+        season: int | None = None,
+    ):
+        async with get_session() as session:
+            try:
+                s = await resolve_season(session, season)
+            except SeasonNotFound as e:
+                await interaction.response.send_message(embed=error_embed("Season error", str(e)), ephemeral=True)
+                return
+
+            team = await session.scalar(select(Team).where(Team.name.ilike(name)))
+            if not team:
+                await interaction.response.send_message(embed=error_embed("Unknown club", f"No club named **{name}**."), ephemeral=True)
+                return
+
+            ts = await session.scalar(select(TeamSeason).where(TeamSeason.team_id == team.id, TeamSeason.season_id == s.id))
+            if ts is None:
+                ts = TeamSeason(team_id=team.id, season_id=s.id)
+                session.add(ts)
+                await session.flush()
+
+            # Sets ONLY the record -- deliberately leaves goals for/against,
+            # OT-win split, streak, last-10, and every player/game stat
+            # completely untouched.
+            ts.wins = wins
+            ts.losses = losses
+            ts.ot_losses = ot_losses
+            ts.points = points
+
+            await recompute_standings(session, s.id)
+
+        await interaction.response.send_message(
+            embed=success_embed("Record set", f"**{team.name}** is now {wins}-{losses}-{ot_losses}, {points} pts in {s.name}.")
+        )
+
+    @admin_group.command(name="forfeit-game", description="Enforce a club forfeit on a match")
+    @app_commands.describe(
+        winning_team="Team that wins by forfeit",
+        losing_team="Team that loses by forfeit",
+        score="Recorded score, e.g. '1-0'",
+        reason="Reason for the forfeit",
+        game_number="Schedule game number this forfeit applies to (optional -- auto-detected if omitted)",
+    )
+    @app_commands.autocomplete(winning_team=team_name_autocomplete, losing_team=team_name_autocomplete)
+    @commissioner_only()
+    async def admin_forfeit_game(
+        self,
+        interaction: discord.Interaction,
+        winning_team: str,
+        losing_team: str,
+        score: str,
+        reason: str,
+        game_number: int | None = None,
+        season: int | None = None,
+    ):
+        await interaction.response.defer()
+        async with get_session() as session:
+            try:
+                s = await resolve_season(session, season)
+            except SeasonNotFound as e:
+                await interaction.followup.send(embed=error_embed("Season error", str(e)))
+                return
+            win_team = await session.scalar(select(Team).where(Team.name.ilike(winning_team)))
+            lose_team = await session.scalar(select(Team).where(Team.name.ilike(losing_team)))
+            if not win_team or not lose_team:
+                await interaction.followup.send(embed=error_embed("Unknown club", "Both clubs must exist."))
+                return
+            try:
+                win_score, lose_score = (int(x) for x in score.replace(" ", "").split("-"))
+            except ValueError:
+                await interaction.followup.send(embed=error_embed("Bad score format", "Use the format `1-0`."))
+                return
+
+            schedule = None
+            if game_number is not None:
+                schedule = await session.scalar(select(ScheduleGame).where(ScheduleGame.season_id == s.id, ScheduleGame.game_number == game_number))
+            else:
+                schedule = await find_pending_schedule_for_matchup(session, s.id, win_team.id, lose_team.id)
+
+            is_playoff_game = bool(schedule and schedule.is_playoffs)
+
+            now = dt.datetime.now(dt.timezone.utc)
+            game = Game(
+                season_id=s.id,
+                schedule_id=schedule.id if schedule else None,
+                home_team_id=win_team.id,
+                away_team_id=lose_team.id,
+                home_score=win_score,
+                away_score=lose_score,
+                is_forfeit=True,
+                imported_at=now,
+                played_at=now,
+                imported_by_discord_id=interaction.user.id,
+            )
+            session.add(game)
+            await session.flush()
+
+            session.add(
+                Forfeit(
+                    season_id=s.id,
+                    schedule_id=schedule.id if schedule else None,
+                    game_id=game.id,
+                    winning_team_id=win_team.id,
+                    losing_team_id=lose_team.id,
+                    winning_score=win_score,
+                    losing_score=lose_score,
+                    reason=reason,
+                    entered_by_discord_id=interaction.user.id,
+                    entered_at=now,
+                )
+            )
+
+            if not is_playoff_game:
+                await apply_team_season_delta(session, win_team.id, s.id, win_score, lose_score, False)
+                await apply_team_season_delta(session, lose_team.id, s.id, lose_score, win_score, False)
+
+            if schedule:
+                schedule.status = ScheduleStatus.FORFEITED
+                schedule.game_id = game.id
+
+            await session.flush()
+            if not is_playoff_game:
+                await recompute_standings(session, s.id)
+
+            league_logo_url = await get_league_logo_url(session, interaction.guild_id)
+            background_url = await get_league_background_url(session, interaction.guild_id)
+            graphic_path = await render_game_result(game, win_team, lose_team, league_logo_url, background_url)
+
+            series_status_text = None
+            if schedule and schedule.playoff_series_id:
+                series = await record_series_result(session, schedule, game)
+                if series is not None:
+                    team_a = await session.get(Team, series.team_a_id)
+                    team_b = await session.get(Team, series.team_b_id)
+                    if series.winner_team_id is not None:
+                        winner = team_a if series.winner_team_id == series.team_a_id else team_b
+                        series_status_text = f"🏆 **{winner.name}** wins the {series.round_name} series {max(series.wins_a, series.wins_b)}-{min(series.wins_a, series.wins_b)}!"
+                    else:
+                        series_status_text = f"{series.round_name}: **{team_a.name}** {series.wins_a} - {series.wins_b} **{team_b.name}**"
+
+            await self._refresh_everything(interaction, session)
+
+        embed = success_embed("Forfeit recorded", f"**{win_team.name}** defeats **{lose_team.name}** {win_score}-{lose_score} by forfeit.\n*Reason: {reason}*")
+        if series_status_text:
+            embed.add_field(name="Playoff Series", value=series_status_text, inline=False)
+        elif is_playoff_game:
+            embed.add_field(name="Note", value="This was tagged as a playoff game, but no series was found to update.", inline=False)
+        await interaction.followup.send(embed=embed, file=discord.File(graphic_path))
+        await self._post_to_results_channel(interaction, embed, graphic_path)
+
+    @admin_group.command(name="list-captured", description="List recently archived EA matches for a club (to find a match ID)")
+    @app_commands.describe(name="Club name")
+    @app_commands.autocomplete(name=team_name_autocomplete)
+    @commissioner_only()
+    async def admin_list_captured(self, interaction: discord.Interaction, name: str):
+        await interaction.response.defer(ephemeral=True)
+        async with get_session() as session:
+            team = await session.scalar(select(Team).where(Team.name.ilike(name)))
+            if not team:
+                await interaction.followup.send(embed=error_embed("Unknown club", f"No club named **{name}**."))
+                return
+            ts = await session.scalar(select(TeamSeason).where(TeamSeason.team_id == team.id, TeamSeason.club_id.is_not(None)))
+            if not ts or not ts.club_id:
+                await interaction.followup.send(embed=error_embed("No club ID", f"**{team.name}** has no linked EASHL Club ID."))
+                return
+
+            matches = (
+                await session.execute(
+                    select(CapturedMatch)
+                    .where(or_(CapturedMatch.club_id_a == ts.club_id, CapturedMatch.club_id_b == ts.club_id))
+                    .order_by(CapturedMatch.ea_timestamp.desc())
+                    .limit(15)
+                )
+            ).scalars().all()
+            if not matches:
+                await interaction.followup.send(embed=error_embed("Nothing archived", f"No captured matches found for **{team.name}**."))
+                return
+
+            import datetime as dt
+            lines = []
+            for m in matches:
+                played_at = dt.datetime.fromtimestamp(m.ea_timestamp, tz=dt.timezone.utc).strftime("%b %d, %I:%M %p UTC")
+                lines.append(f"`{m.match_id}` — {played_at}")
+            await interaction.followup.send(embed=info_embed(f"Recent captured matches — {team.name}", "\n".join(lines)))
+
+    @admin_group.command(name="check-schedule", description="Show the exact stored fields for a schedule slot (diagnostic)")
+    @app_commands.describe(game_number="The game number to inspect", season="Season number (defaults to active)")
+    @commissioner_only()
+    async def admin_check_schedule(self, interaction: discord.Interaction, game_number: int, season: int | None = None):
+        await interaction.response.defer(ephemeral=True)
+        async with get_session() as session:
+            try:
+                s = await resolve_season(session, season)
+            except SeasonNotFound as e:
+                await interaction.followup.send(embed=error_embed("Season error", str(e)))
+                return
+            schedule = await session.scalar(select(ScheduleGame).where(ScheduleGame.season_id == s.id, ScheduleGame.game_number == game_number))
+            if not schedule:
+                await interaction.followup.send(embed=error_embed("Not found", f"No schedule entry for game #{game_number} in {s.name}."))
+                return
+
+            game_info = "No game linked"
+            if schedule.game_id:
+                game = await session.get(Game, schedule.game_id)
+                if game:
+                    game_info = f"Game #{game.id}: {game.home_score}-{game.away_score}, external_match_id=`{game.external_match_id}`"
+
+            lines = (
+                f"**is_playoffs**: `{schedule.is_playoffs}`\n"
+                f"**status**: `{schedule.status}`\n"
+                f"**game_id**: `{schedule.game_id}`\n"
+                f"**week**: `{schedule.week}`\n"
+                f"**home_team_id**: `{schedule.home_team_id}` / **away_team_id**: `{schedule.away_team_id}`\n\n"
+                f"{game_info}"
+            )
+            await interaction.followup.send(embed=info_embed(f"Schedule slot — Game #{game_number}", lines))
+
+    @admin_group.command(name="force-delete-match", description="Directly delete a game by its EA match ID (for orphaned games no longer linked to a schedule slot)")
+    @app_commands.describe(match_id="Full or partial EA match ID -- from /league admin list-captured or dump-match")
+    @commissioner_only()
+    async def admin_force_delete_match(self, interaction: discord.Interaction, match_id: str):
+        await interaction.response.defer(ephemeral=True)
+        async with get_session() as session:
+            matches = (await session.execute(select(Game).where(Game.external_match_id.ilike(f"%{match_id}%")))).scalars().all()
+            if not matches:
+                await interaction.followup.send(embed=error_embed("Not found", f"No game found with match ID containing `{match_id}`."))
+                return
+            if len(matches) > 1:
+                ids = "\n".join(f"`{g.external_match_id}`" for g in matches)
+                await interaction.followup.send(embed=error_embed("Multiple matches", f"More than one game matched -- be more specific:\n{ids}"))
+                return
+
+            game = matches[0]
+            found_id = game.external_match_id
+            await reverse_game(session, game)
+            await self._refresh_everything(interaction, session)
+
+        await interaction.followup.send(embed=success_embed("Force-deleted", f"Removed the orphaned game for match `{found_id}` and reversed its stats. You can now re-import it."))
+
+    @admin_group.command(name="dump-match", description="Get the full raw EA data for a specific match ID, as a file")
+    @app_commands.describe(match_id="The match ID, copied from /league admin list-captured")
+    @commissioner_only()
+    async def admin_dump_match(self, interaction: discord.Interaction, match_id: str):
+        await interaction.response.defer(ephemeral=True)
+        async with get_session() as session:
+            m = await session.scalar(select(CapturedMatch).where(CapturedMatch.match_id == match_id))
+            if not m:
+                await interaction.followup.send(embed=error_embed("Not found", f"No archived match with ID `{match_id}`."))
+                return
+
+            import json
+            import tempfile
+            content = json.dumps(m.raw_payload, indent=2)
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+                f.write(content)
+                temp_path = f.name
+
+            await interaction.followup.send(
+                content=f"Raw data for match `{match_id}`:",
+                file=discord.File(temp_path, filename=f"match_{match_id}.json"),
+            )
+
+    @admin_group.command(name="find-player", description="Find every player record matching a search, with their exact stored name and real game count")
+    @app_commands.describe(search="Any part of the gamertag to search for")
+    @commissioner_only()
+    async def admin_find_player(self, interaction: discord.Interaction, search: str):
+        await interaction.response.defer(ephemeral=True)
+        async with get_session() as session:
+            matches = (
+                await session.execute(select(Player).where(Player.gamertag.ilike(f"%{search}%")).order_by(Player.gamertag))
+            ).scalars().all()
+            if not matches:
+                await interaction.followup.send(embed=error_embed("No matches", f"No player records found containing **{search}**."))
+                return
+
+            lines = []
+            for p in matches[:20]:
+                skater_count = await session.scalar(select(func.count()).select_from(PlayerGameStat).where(PlayerGameStat.player_id == p.id))
+                goalie_count = await session.scalar(select(func.count()).select_from(GoalieGameStat).where(GoalieGameStat.player_id == p.id))
+                total_games = (skater_count or 0) + (goalie_count or 0)
+                linked_user = await session.scalar(select(User).where(User.player_id == p.id))
+                linked_str = f"linked to <@{linked_user.discord_id}>" if linked_user else "not linked to anyone"
+                # Exact stored text wrapped in code formatting -- makes stray
+                # spaces or look-alike characters visible/copyable precisely.
+                lines.append(f"`{p.gamertag}` — **{total_games}** real game(s), {linked_str}")
+
+            summary = "\n".join(lines)
+            if len(matches) > 20:
+                summary += f"\n\n...and {len(matches) - 20} more (narrow your search)"
+            await interaction.followup.send(embed=info_embed(f"Player records matching \"{search}\"", summary))
+
+    @admin_group.command(name="merge-player", description="Move a player's stats from one name onto another (fixes split/duplicate records)")
+    @app_commands.describe(from_name="The duplicate/incorrect name currently holding the stats", into_gamertag="The correct, real EA gamertag to move those stats onto")
+    @commissioner_only()
+    async def admin_merge_player(self, interaction: discord.Interaction, from_name: str, into_gamertag: str):
+        await interaction.response.defer(ephemeral=True)
+        async with get_session() as session:
+            old_player = await session.scalar(select(Player).where(Player.gamertag.ilike(from_name)))
+            if old_player is None:
+                await interaction.followup.send(embed=error_embed("Not found", f"No player found matching **{from_name}**."))
+                return
+
+            new_player = await session.scalar(select(Player).where(Player.gamertag.ilike(into_gamertag)))
+            if new_player is None:
+                new_player = Player(gamertag=into_gamertag, is_goalie=old_player.is_goalie)
+                session.add(new_player)
+                await session.flush()
+
+            if old_player.id == new_player.id:
+                await interaction.followup.send(embed=error_embed("Same player", "Those are already the same player record."))
+                return
+
+            moved, skipped = 0, 0
+            old_seasons = (await session.execute(select(PlayerSeason).where(PlayerSeason.player_id == old_player.id))).scalars().all()
+            for ps in old_seasons:
+                collision = await session.scalar(
+                    select(PlayerSeason).where(PlayerSeason.player_id == new_player.id, PlayerSeason.season_id == ps.season_id)
+                )
+                if collision is not None:
+                    skipped += 1
+                    continue
+                ps.player_id = new_player.id
+                moved += 1
+
+            for stat in (await session.execute(select(PlayerGameStat).where(PlayerGameStat.player_id == old_player.id))).scalars().all():
+                stat.player_id = new_player.id
+            for stat in (await session.execute(select(GoalieGameStat).where(GoalieGameStat.player_id == old_player.id))).scalars().all():
+                stat.player_id = new_player.id
+
+            remaining = await session.scalar(select(PlayerSeason).where(PlayerSeason.player_id == old_player.id))
+            deleted_old = remaining is None
+            if deleted_old:
+                await session.delete(old_player)
+
+        summary = f"Moved **{moved}** season record(s) from **{from_name}** onto **{into_gamertag}**."
+        if skipped:
+            summary += f" ({skipped} skipped -- {into_gamertag} already had a record for that season, left untouched.)"
+        summary += f"\n\nOld duplicate record {'removed' if deleted_old else 'kept (still has other data attached)'}."
+        await interaction.followup.send(embed=success_embed("Player merged", summary))
+
+    @admin_group.command(name="delete-game", description="Delete an imported game and reverse all stats")
+    @app_commands.describe(game_number="The schedule game number to undo")
+    @commissioner_only()
+    async def admin_delete_game(self, interaction: discord.Interaction, game_number: int, season: int | None = None):
+        await interaction.response.defer()
+        async with get_session() as session:
+            try:
+                s = await resolve_season(session, season)
+            except SeasonNotFound as e:
+                await interaction.followup.send(embed=error_embed("Season error", str(e)))
+                return
+            schedule = await session.scalar(select(ScheduleGame).where(ScheduleGame.season_id == s.id, ScheduleGame.game_number == game_number))
+            if not schedule or not schedule.game_id:
+                await interaction.followup.send(embed=error_embed("Nothing to delete", f"Game #{game_number} has no imported result."))
+                return
+            game = await session.get(Game, schedule.game_id)
+            await reverse_game(session, game)
+            await self._refresh_everything(interaction, session)
+        await interaction.followup.send(embed=success_embed("Game deleted", f"Game #{game_number} was removed and all stats/standings reversed."))
+
+    @admin_group.command(name="generate-playoffs", description="Seed a single-elimination playoff bracket from the current standings")
+    @app_commands.describe(
+        num_teams="How many teams make the bracket -- must be a power of 2 (4, 8, 16...)",
+        best_of="Games per series -- must be odd (3, 5, 7...)",
+    )
+    @commissioner_only()
+    async def admin_generate_playoffs(self, interaction: discord.Interaction, num_teams: int, best_of: int = 5, season: int | None = None):
+        async with get_session() as session:
+            try:
+                s = await resolve_season(session, season)
+            except SeasonNotFound as e:
+                await interaction.response.send_message(embed=error_embed("Season error", str(e)), ephemeral=True)
+                return
+
+            existing = await get_bracket(session, s.id)
+            if existing:
+                await interaction.response.send_message(
+                    embed=error_embed("Bracket already exists", f"{s.name} already has a playoff bracket."), ephemeral=True
+                )
+                return
+
+            entries = (
+                await session.execute(select(StandingsEntry).where(StandingsEntry.season_id == s.id).order_by(StandingsEntry.rank))
+            ).scalars().all()
+            if len(entries) < num_teams:
+                await interaction.response.send_message(
+                    embed=error_embed("Not enough teams", f"{s.name}'s standings only has {len(entries)} teams, but you asked for {num_teams}."),
+                    ephemeral=True,
+                )
+                return
+
+            seeded_team_ids = [e.team_id for e in entries[:num_teams]]
+
+            try:
+                created = await generate_bracket(session, s.id, seeded_team_ids, best_of)
+            except PlayoffError as e:
+                await interaction.response.send_message(embed=error_embed("Couldn't generate bracket", str(e)), ephemeral=True)
+                return
+
+            first_round = [s for s in created if s.round_order == 1]
+            future_round_count = len(created) - len(first_round)
+            lines = []
+            for series in first_round:
+                team_a = await session.get(Team, series.team_a_id)
+                team_b = await session.get(Team, series.team_b_id)
+                lines.append(f"({series.seed_a}) {team_a.name} vs ({series.seed_b}) {team_b.name}")
+            if future_round_count:
+                lines.append(f"\n+ {future_round_count} more series created for later rounds (shown as TBD until determined).")
+
+        await interaction.response.send_message(
+            embed=success_embed(f"{first_round[0].round_name} bracket generated", "\n".join(lines) + f"\n\nBest of {best_of}. Enter games with `/league admin submit-game` as usual.")
+        )
+
+    @admin_group.command(name="advance-round", description="Advance to the next playoff round once all series in the current round are decided")
+    @app_commands.describe(round_order="Which round number to advance from (1 = first round, 2 = second, etc.)")
+    @commissioner_only()
+    async def admin_advance_round(self, interaction: discord.Interaction, round_order: int, season: int | None = None):
+        async with get_session() as session:
+            try:
+                s = await resolve_season(session, season)
+            except SeasonNotFound as e:
+                await interaction.response.send_message(embed=error_embed("Season error", str(e)), ephemeral=True)
+                return
+
+            try:
+                created = await advance_round(session, s.id, round_order)
+            except PlayoffError as e:
+                await interaction.response.send_message(embed=error_embed("Can't advance yet", str(e)), ephemeral=True)
+                return
+
+            lines = []
+            for series in created:
+                team_a = await session.get(Team, series.team_a_id)
+                team_b = await session.get(Team, series.team_b_id)
+                lines.append(f"{team_a.name} vs {team_b.name}")
+
+        await interaction.response.send_message(embed=success_embed(f"{created[0].round_name} confirmed", "\n".join(lines)))
+
+    @admin_group.command(name="generate-schedule", description="Auto-generate a full round-robin schedule for the league")
+    @app_commands.describe(
+        times_through="How many times each team plays every other team (2 = home-and-away). Give only ONE of these three.",
+        games_per_team="Alternative to times_through -- target number of games per team (rounds to the nearest fair value)",
+        weeks="Alternative to times_through -- target number of weeks in the season (rounds to the nearest fair value)",
+        teams="Comma-separated team names to include (optional -- defaults to every active club in the league)",
+        starting_game_number="First game number to use (optional -- defaults to continuing after any existing schedule)",
+    )
+    @commissioner_only()
+    async def admin_generate_schedule(
+        self,
+        interaction: discord.Interaction,
+        times_through: int | None = None,
+        games_per_team: int | None = None,
+        weeks: int | None = None,
+        teams: str | None = None,
+        starting_game_number: int | None = None,
+        season: int | None = None,
+    ):
+        provided = [v for v in (times_through, games_per_team, weeks) if v is not None]
+        if len(provided) > 1:
+            await interaction.response.send_message(
+                embed=error_embed("Too many options", "Give only ONE of `times_through`, `games_per_team`, or `weeks` -- not more than one."),
+                ephemeral=True,
+            )
+            return
+
+        async with get_session() as session:
+            try:
+                s = await resolve_season(session, season)
+            except SeasonNotFound as e:
+                await interaction.response.send_message(embed=error_embed("Season error", str(e)), ephemeral=True)
+                return
+
+            if teams:
+                names = [t.strip() for t in teams.split(",") if t.strip()]
+                team_objs = []
+                for name in names:
+                    team = await session.scalar(select(Team).where(Team.name.ilike(name)))
+                    if not team:
+                        await interaction.response.send_message(embed=error_embed("Unknown club", f"No club named **{name}**."), ephemeral=True)
+                        return
+                    team_objs.append(team)
+            else:
+                team_objs = (
+                    await session.execute(select(Team).where(Team.is_active.is_(True)).order_by(Team.name))
+                ).scalars().all()
+
+            if len(team_objs) < 2:
+                await interaction.response.send_message(
+                    embed=error_embed("Not enough clubs", "Need at least 2 clubs to generate a schedule -- add clubs with `/league club add` first."),
+                    ephemeral=True,
+                )
+                return
+
+            # The league's configured weekly time slots -- each slot is one
+            # full round (every team plays once, simultaneously, against a
+            # different opponent) so "4 games per night" means 4 separate
+            # rounds happen that night, not 4 teams sharing one round.
+            def parse_slot(slot_str: str) -> tuple[str, str]:
+                day, _, time = slot_str.strip().partition(" ")
+                return day, time
+
+            regular_pattern = await get_schedule_pattern(session, interaction.guild_id)
+            first_week_pattern = await get_schedule_first_week_pattern(session, interaction.guild_id)
+            regular_slots = [parse_slot(s) for s in regular_pattern]
+            first_week_slots = [parse_slot(s) for s in first_week_pattern] if first_week_pattern else None
+
+            # A round-robin "round" always has every team play exactly
+            # once. games_per_team is a direct target (however many total
+            # games each team should end up with). weeks means actual
+            # CALENDAR weeks -- since each calendar week contains one round
+            # per configured slot (e.g. 3 nights x 4 times = 12 rounds in
+            # one calendar week), weeks needs multiplying by how many
+            # rounds a week actually holds, not treated as 1 round = 1 week.
+            games_per_full_pass = len(team_objs) - 1
+            if games_per_team is not None:
+                target_rounds = games_per_team
+            elif weeks is not None:
+                if first_week_slots:
+                    target_rounds = len(first_week_slots) + max(0, weeks - 1) * len(regular_slots)
+                else:
+                    target_rounds = weeks * len(regular_slots)
+            else:
+                target_rounds = None
+
+            if target_rounds is not None:
+                if target_rounds < 1:
+                    await interaction.response.send_message(embed=error_embed("Invalid value", "Must be at least 1."), ephemeral=True)
+                    return
+                passes_needed = -(-target_rounds // games_per_full_pass)  # ceiling division
+                try:
+                    full_matchups = generate_round_robin([t.id for t in team_objs], times_through=passes_needed)
+                except ValueError as e:
+                    await interaction.response.send_message(embed=error_embed("Couldn't generate schedule", str(e)), ephemeral=True)
+                    return
+                matchups = [m for m in full_matchups if m.round_number <= target_rounds]
+            else:
+                effective_times_through = times_through if times_through is not None else 2
+                try:
+                    matchups = generate_round_robin([t.id for t in team_objs], times_through=effective_times_through)
+                except ValueError as e:
+                    await interaction.response.send_message(embed=error_embed("Couldn't generate schedule", str(e)), ephemeral=True)
+                    return
+
+            if starting_game_number is not None:
+                next_number = starting_game_number
+            else:
+                existing_numbers = (
+                    await session.execute(select(ScheduleGame.game_number).where(ScheduleGame.season_id == s.id))
+                ).scalars().all()
+                next_number = (max(existing_numbers) + 1) if existing_numbers else 1
+
+            # Check the whole range we're about to use for collisions BEFORE
+            # inserting anything -- this is what turns a raw database crash
+            # (which happened if old schedule rows were still present, e.g.
+            # after removing some teams but not clearing their games) into a
+            # clear, actionable error message instead.
+            proposed_numbers = set(range(next_number, next_number + len(matchups)))
+            colliding = (
+                await session.execute(
+                    select(ScheduleGame.game_number).where(
+                        ScheduleGame.season_id == s.id, ScheduleGame.game_number.in_(proposed_numbers)
+                    )
+                )
+            ).scalars().all()
+            if colliding:
+                await interaction.response.send_message(
+                    embed=error_embed(
+                        "Game numbers already taken",
+                        f"{s.name} already has games numbered {min(colliding)}-{max(colliding)} (or overlapping). "
+                        f"Use `/league admin clear-schedule` to remove the old schedule first, or pick a different "
+                        f"`starting_game_number` that doesn't overlap with existing games.",
+                    ),
+                    ephemeral=True,
+                )
+                return
+
+            # Slot assignment: advance to the next slot only when moving to
+            # a NEW ROUND, never mid-round -- every game within one round
+            # is simultaneous and must share the same day/time. The
+            # calendar week number (shown as "week" everywhere else in the
+            # bot) is tracked separately from the internal round number,
+            # since one calendar week can contain many rounds.
+            created_count = 0
+            current_round_number = None
+            calendar_week = 1
+            slot_position = 0
+            active_pattern = first_week_slots if first_week_slots else regular_slots
+            day_of_week, game_time = active_pattern[0]
+
+            for m in matchups:
+                if m.round_number != current_round_number:
+                    current_round_number = m.round_number
+                    if slot_position >= len(active_pattern):
+                        calendar_week += 1
+                        slot_position = 0
+                        active_pattern = regular_slots  # only the very first calendar week can use the override
+                    day_of_week, game_time = active_pattern[slot_position]
+                    slot_position += 1
+
+                session.add(
+                    ScheduleGame(
+                        season_id=s.id,
+                        game_number=next_number,
+                        week=calendar_week,
+                        home_team_id=m.home_team_id,
+                        away_team_id=m.away_team_id,
+                        day_of_week=day_of_week,
+                        game_time=game_time,
+                    )
+                )
+                next_number += 1
+                created_count += 1
+
+        games_per_team_actual = matchups[-1].round_number  # one round = one game per team, always
+        summary = (
+            f"Created **{created_count}** games across **{calendar_week}** calendar week(s) for **{len(team_objs)}** clubs "
+            f"(**{games_per_team_actual}** games per team).\n\nGame numbers **{next_number - created_count}**–**{next_number - 1}**. "
+            f"Use `/league schedule view` to see the full schedule."
+        )
+        await interaction.response.send_message(embed=success_embed("Schedule generated", summary))
+
+    @admin_group.command(name="clear-schedule", description="Delete a season's schedule so it can be regenerated cleanly")
+    @app_commands.describe(
+        include_played="Also delete games that already have results imported (DESTRUCTIVE -- defaults to False, only clears unplayed games)"
+    )
+    @commissioner_only()
+    async def admin_clear_schedule(self, interaction: discord.Interaction, include_played: bool = False, season: int | None = None):
+        async with get_session() as session:
+            try:
+                s = await resolve_season(session, season)
+            except SeasonNotFound as e:
+                await interaction.response.send_message(embed=error_embed("Season error", str(e)), ephemeral=True)
+                return
+
+            stmt = select(ScheduleGame).where(ScheduleGame.season_id == s.id)
+            if not include_played:
+                stmt = stmt.where(ScheduleGame.status == ScheduleStatus.SCHEDULED)
+            games = (await session.execute(stmt)).scalars().all()
+
+            if not games:
+                await interaction.response.send_message(
+                    embed=info_embed("Nothing to clear", f"No {'games' if include_played else 'unplayed games'} found for {s.name}.")
+                )
+                return
+
+            played_count = sum(1 for g in games if g.status != ScheduleStatus.SCHEDULED)
+            deleted_count = len(games)
+            for g in games:
+                await session.delete(g)
+
+        await interaction.response.send_message(
+            embed=success_embed(
+                "Schedule cleared",
+                f"Deleted **{deleted_count}** {'games' if include_played else 'unplayed games'} from {s.name}'s schedule."
+                + (f" This included **{played_count}** already-played games." if include_played and played_count else ""),
+            )
+        )
+
+    # ==================================================================
+    # /league refresh
+    # ==================================================================
+
+    @refresh_group.command(name="standings", description="Manually re-post the standings graphic")
+    @commissioner_only()
+    async def refresh_standings(self, interaction: discord.Interaction, season: int | None = None):
+        await interaction.response.defer()
+        async with get_session() as session:
+            try:
+                s = await resolve_season(session, season)
+            except SeasonNotFound as e:
+                await interaction.followup.send(embed=error_embed("Season error", str(e)))
+                return
+            entries = (await session.execute(select(StandingsEntry).where(StandingsEntry.season_id == s.id).order_by(StandingsEntry.rank))).scalars().all()
+            if not entries:
+                await interaction.followup.send(embed=info_embed("No standings", f"No games played yet in {s.name}."))
+                return
+            rows = [(e, await session.get(Team, e.team_id)) for e in entries]
+            league_logo_url = await get_league_logo_url(session, interaction.guild_id)
+            background_url = await get_league_background_url(session, interaction.guild_id)
+            path = await render_standings(s.name, rows, league_logo_url, background_url)
+            await self._refresh_everything(interaction, session)
+        await interaction.followup.send(file=discord.File(path))
+
+    @refresh_group.command(name="stat-leaders", description="Manually re-post the combined stat leaders graphic")
+    @commissioner_only()
+    async def refresh_stat_leaders(self, interaction: discord.Interaction, season: int | None = None):
+        await interaction.response.defer()
+        async with get_session() as session:
+            try:
+                s = await resolve_season(session, season)
+            except SeasonNotFound as e:
+                await interaction.followup.send(embed=error_embed("Season error", str(e)))
+                return
+
+            categories = [
+                ("Points", await points_leaders(session, s.id, limit=5)),
+                ("Goals", await goals_leaders(session, s.id, limit=5)),
+                ("Assists", await assists_leaders(session, s.id, limit=5)),
+                ("Hits", await hits_leaders(session, s.id, limit=5)),
+                ("PIM", await pim_leaders(session, s.id, limit=5)),
+                ("Faceoff %", await faceoff_pct_leaders(session, s.id, limit=5)),
+                ("Takeaways", await takeaways_leaders(session, s.id, limit=5)),
+                ("Interceptions", await interceptions_leaders(session, s.id, limit=5)),
+                ("Blocked Shots", await blocked_shots_leaders(session, s.id, limit=5)),
+                ("GAA", await gaa_leaders(session, s.id, limit=5)),
+                ("Save %", await goalie_leaders(session, s.id, limit=5)),
+                ("Shutouts", await shutouts_leaders(session, s.id, limit=5)),
+            ]
+
+            if not any(rows for _, rows in categories):
+                # No games played yet -- rather than showing every box
+                # empty, list whoever's already linked their account with
+                # /league player link, all at 0, so their names are at
+                # least visible before the season starts.
+                linked_players = (
+                    await session.execute(select(Player).join(User, User.player_id == Player.id).limit(5))
+                ).scalars().all()
+                if linked_players:
+                    fallback_rows = [
+                        LeaderRow(rank=i + 1, player=p, team=None, value=0, secondary="") for i, p in enumerate(linked_players)
+                    ]
+                    categories = [(name, fallback_rows) for name, _ in categories]
+
+            league_logo_url = await get_league_logo_url(session, interaction.guild_id)
+            background_url = await get_league_background_url(session, interaction.guild_id)
+            path = await render_combined_leaders_board(s.name, categories, league_logo_url, background_url)
+            await self._refresh_everything(interaction, session)
+        await interaction.followup.send(file=discord.File(path))
+
+    @refresh_group.command(name="match-result", description="Re-post the result graphic/recap for an already-imported game")
+    @app_commands.describe(game_number="Schedule game number")
+    @commissioner_only()
+    async def refresh_match_result(self, interaction: discord.Interaction, game_number: int, season: int | None = None):
+        await interaction.response.defer()
+        async with get_session() as session:
+            try:
+                s = await resolve_season(session, season)
+            except SeasonNotFound as e:
+                await interaction.followup.send(embed=error_embed("Season error", str(e)))
+                return
+            schedule = await session.scalar(select(ScheduleGame).where(ScheduleGame.season_id == s.id, ScheduleGame.game_number == game_number))
+            if not schedule or not schedule.game_id:
+                await interaction.followup.send(embed=error_embed("No result", f"Game #{game_number} hasn't been imported yet."))
+                return
+            game = await session.get(Game, schedule.game_id)
+            home_team = await session.get(Team, game.home_team_id)
+            away_team = await session.get(Team, game.away_team_id)
+            league_logo_url = await get_league_logo_url(session, interaction.guild_id)
+            background_url = await get_league_background_url(session, interaction.guild_id)
+            path = await render_game_result(game, home_team, away_team, league_logo_url, background_url)
+            embed = info_embed(f"{home_team.name} {game.home_score} - {game.away_score} {away_team.name}", game.recap_text or "")
+        await interaction.followup.send(embed=embed, file=discord.File(path))
+
+    @refresh_group.command(name="fixture", description="Re-post the current schedule")
+    @commissioner_only()
+    async def refresh_fixture(self, interaction: discord.Interaction, season: int | None = None):
+        await self._send_schedule(interaction, season=season, week=None, status=None)
+
+    @refresh_group.command(name="playoffs", description="Re-post the playoff bracket")
+    @commissioner_only()
+    async def refresh_playoffs(self, interaction: discord.Interaction, season: int | None = None):
+        await interaction.response.defer()
+        async with get_session() as session:
+            try:
+                s = await resolve_season(session, season)
+            except SeasonNotFound as e:
+                await interaction.followup.send(embed=error_embed("Season error", str(e)))
+                return
+
+            rounds = await get_bracket(session, s.id)
+            if not rounds:
+                await interaction.followup.send(
+                    embed=info_embed("No bracket yet", f"No playoff bracket has been generated for {s.name}. Use `/league admin generate-playoffs` first.")
+                )
+                return
+
+            all_team_ids = {t_id for round_series in rounds for series in round_series for t_id in (series.team_a_id, series.team_b_id)}
+            teams_by_id = {t_id: await session.get(Team, t_id) for t_id in all_team_ids}
+            league_logo_url = await get_league_logo_url(session, interaction.guild_id)
+            background_url = await get_league_background_url(session, interaction.guild_id)
+            path = await render_playoff_bracket(s.name, rounds, teams_by_id, league_logo_url, background_url)
+
+        await interaction.followup.send(file=discord.File(path))
+
+    # ==================================================================
+    # /league schedule
+    # ==================================================================
+
+    @schedule_group.command(name="set-pattern", description="Set this league's recurring weekly game day/time slots")
+    @app_commands.describe(pattern="Slots separated by ' | ', e.g. 'Tuesday 8:00 PM EST | Wednesday 8:00 PM EST | Thursday 8:00 PM EST'")
+    @commissioner_only()
+    async def schedule_set_pattern(self, interaction: discord.Interaction, pattern: str):
+        slots = [s.strip() for s in pattern.split("|") if s.strip()]
+        if not slots:
+            await interaction.response.send_message(embed=error_embed("Empty pattern", "Provide at least one slot."), ephemeral=True)
+            return
+        async with get_session() as session:
+            await set_schedule_pattern(session, interaction.guild_id, slots)
+        await interaction.response.send_message(
+            embed=success_embed("Schedule pattern set", f"{len(slots)} slot(s) will now cycle each week:\n" + "\n".join(f"• {s}" for s in slots))
+        )
+
+    @schedule_group.command(name="set-first-week-pattern", description="Set a one-time different pattern for week 1 only (e.g. a single starting day)")
+    @app_commands.describe(pattern="Same format as set-pattern. Leave blank to clear the override and use the regular pattern for week 1 too.")
+    @commissioner_only()
+    async def schedule_set_first_week_pattern(self, interaction: discord.Interaction, pattern: str = ""):
+        slots = [s.strip() for s in pattern.split("|") if s.strip()] if pattern else None
+        async with get_session() as session:
+            await set_schedule_first_week_pattern(session, interaction.guild_id, slots)
+        if slots:
+            await interaction.response.send_message(
+                embed=success_embed("Week 1 pattern set", f"Week 1 only will use:\n" + "\n".join(f"• {s}" for s in slots) + "\n\nEvery week after uses the regular pattern.")
+            )
+        else:
+            await interaction.response.send_message(embed=success_embed("Week 1 override cleared", "Week 1 will now use the regular weekly pattern like every other week."))
+
+    @schedule_group.command(name="post-button", description="Post a 'Team Schedule' button in this channel")
+    @commissioner_only()
+    async def schedule_post_button(self, interaction: discord.Interaction):
+        view = ScheduleButtonView()
+        await interaction.response.send_message("Click below to look up any team's schedule, sent just to you.", view=view)
+
+    @schedule_group.command(name="add", description="Schedule a match")
+    @app_commands.describe(
+        game_number="Unique game number, used by /league admin submit-game",
+        home_team="Home club",
+        away_team="Away club",
+        week="Week number",
+        day_of_week="e.g. Tuesday (optional)",
+        game_time="e.g. 8:00 PM EST (optional)",
+    )
+    @app_commands.autocomplete(home_team=team_name_autocomplete, away_team=team_name_autocomplete)
+    @commissioner_only()
+    async def schedule_add(
+        self,
+        interaction: discord.Interaction,
+        game_number: int,
+        home_team: str,
+        away_team: str,
+        week: int | None = None,
+        day_of_week: str | None = None,
+        game_time: str | None = None,
+        season: int | None = None,
+    ):
+        async with get_session() as session:
+            try:
+                s = await resolve_season(session, season)
+            except SeasonNotFound as e:
+                await interaction.response.send_message(embed=error_embed("Season error", str(e)), ephemeral=True)
+                return
+            home = await session.scalar(select(Team).where(Team.name.ilike(home_team)))
+            away = await session.scalar(select(Team).where(Team.name.ilike(away_team)))
+            if not home or not away:
+                await interaction.response.send_message(embed=error_embed("Unknown club", "Both clubs must already exist (`/league club add`)."), ephemeral=True)
+                return
+            existing = await session.scalar(select(ScheduleGame).where(ScheduleGame.season_id == s.id, ScheduleGame.game_number == game_number))
+            if existing:
+                await interaction.response.send_message(embed=error_embed("Already scheduled", f"Game #{game_number} already exists for {s.name}."), ephemeral=True)
+                return
+            session.add(
+                ScheduleGame(
+                    season_id=s.id, game_number=game_number, week=week,
+                    home_team_id=home.id, away_team_id=away.id,
+                    day_of_week=day_of_week, game_time=game_time,
+                )
+            )
+        await interaction.response.send_message(embed=success_embed("Scheduled", f"Game #{game_number}: **{home_team}** vs **{away_team}** added to {s.name}."))
+
+    @schedule_group.command(name="view", description="View the full schedule")
+    async def schedule_view(self, interaction: discord.Interaction, season: int | None = None):
+        await self._send_schedule(interaction, season=season, week=None, status=None)
+
+    @schedule_group.command(name="week", description="View the schedule for a specific week")
+    @app_commands.describe(week="Week number")
+    async def schedule_week(self, interaction: discord.Interaction, week: int, season: int | None = None):
+        await self._send_schedule(interaction, season=season, week=week, status=None)
+
+    @schedule_group.command(name="pending", description="View games not yet played")
+    async def schedule_pending(self, interaction: discord.Interaction, season: int | None = None):
+        await self._send_schedule(interaction, season=season, week=None, status=ScheduleStatus.SCHEDULED)
+
+    # ==================================================================
+    # top-level /league postpone-game
+    # ==================================================================
+
+    @league_group.command(name="postpone-game", description="Postpone a scheduled game to be played later")
+    @app_commands.describe(game_number="Schedule game number", reason="Reason for postponing")
+    @commissioner_only()
+    async def postpone_game(self, interaction: discord.Interaction, game_number: int, reason: str, season: int | None = None):
+        async with get_session() as session:
+            try:
+                s = await resolve_season(session, season)
+            except SeasonNotFound as e:
+                await interaction.response.send_message(embed=error_embed("Season error", str(e)), ephemeral=True)
+                return
+            schedule = await session.scalar(select(ScheduleGame).where(ScheduleGame.season_id == s.id, ScheduleGame.game_number == game_number))
+            if not schedule:
+                await interaction.response.send_message(embed=error_embed("Not found", f"No schedule entry for game #{game_number}."), ephemeral=True)
+                return
+            schedule.status = ScheduleStatus.POSTPONED
+        await interaction.response.send_message(embed=success_embed("Game postponed", f"Game #{game_number} marked postponed.\n*Reason: {reason}*"))
+
+    # ==================================================================
+    # helpers
+    # ==================================================================
+
+    @staticmethod
+    async def _resolve_player(
+        session, interaction: discord.Interaction, gamertag: str | None, discord_user: "discord.Member | discord.User | None" = None
+    ) -> Player | None:
+        if gamertag:
+            return await session.scalar(select(Player).where(Player.gamertag.ilike(gamertag)))
+        target_id = discord_user.id if discord_user else interaction.user.id
+        user = await session.scalar(select(User).where(User.discord_id == target_id))
+        if user and user.player_id:
+            return await session.get(Player, user.player_id)
+        return None
+
+    async def _send_schedule(self, interaction: discord.Interaction, *, season: int | None, week: int | None, status: ScheduleStatus | None):
+        await interaction.response.defer()
+        async with get_session() as session:
+            try:
+                s = await resolve_season(session, season)
+            except SeasonNotFound as e:
+                await interaction.followup.send(embed=error_embed("Season error", str(e)))
+                return
+            stmt = select(ScheduleGame).where(ScheduleGame.season_id == s.id)
+            if week is not None:
+                stmt = stmt.where(ScheduleGame.week == week)
+            if status is not None:
+                stmt = stmt.where(ScheduleGame.status == status)
+            stmt = stmt.order_by(ScheduleGame.week, ScheduleGame.game_number)
+            games = (await session.execute(stmt)).scalars().all()
+            if not games:
+                await interaction.followup.send(embed=info_embed("No games", "No matching games found."))
+                return
+
+            all_team_ids = {t_id for g in games for t_id in (g.home_team_id, g.away_team_id)}
+            teams_by_id = {t_id: await session.get(Team, t_id) for t_id in all_team_ids}
+            league_logo_url = await get_league_logo_url(session, interaction.guild_id)
+            background_url = await get_league_background_url(session, interaction.guild_id)
+
+            title = "PENDING GAMES" if status == ScheduleStatus.SCHEDULED else (f"WEEK {week} SCHEDULE" if week is not None else "SCHEDULE")
+            paths = await render_schedule(title, s.name, games, teams_by_id, league_logo_url, background_url)
+
+        # render_schedule returns one image per "page" so a full season is
+        # never truncated -- Discord allows at most 10 file attachments per
+        # message, so split across multiple messages if there are more.
+        for i in range(0, len(paths), 10):
+            chunk = paths[i : i + 10]
+            files = [discord.File(p) for p in chunk]
+            if i == 0:
+                await interaction.followup.send(files=files)
+            else:
+                await interaction.channel.send(files=files)
+
+    async def _generate_and_attach_recap(self, session, game: Game, home_team: Team, away_team: Team) -> str:
+        from bot.models import GoalieGameStat, PlayerGameStat
+
+        home_ts = await session.scalar(select(TeamSeason).where(TeamSeason.team_id == home_team.id, TeamSeason.season_id == game.season_id))
+        away_ts = await session.scalar(select(TeamSeason).where(TeamSeason.team_id == away_team.id, TeamSeason.season_id == game.season_id))
+        home_standing = await session.scalar(select(StandingsEntry).where(StandingsEntry.team_id == home_team.id, StandingsEntry.season_id == game.season_id))
+        away_standing = await session.scalar(select(StandingsEntry).where(StandingsEntry.team_id == away_team.id, StandingsEntry.season_id == game.season_id))
+
+        player_rows = (await session.execute(select(PlayerGameStat).where(PlayerGameStat.game_id == game.id))).scalars().all()
+        goalie_rows = (await session.execute(select(GoalieGameStat).where(GoalieGameStat.game_id == game.id))).scalars().all()
+        player_pairs = [(await session.get(Player, pr.player_id), pr) for pr in player_rows]
+        goalie_pairs = [(await session.get(Player, gr.player_id), gr) for gr in goalie_rows]
+        top_performers = format_top_performers(player_pairs, goalie_pairs)
+
+        ctx = RecapContext(
+            game=game,
+            home_team=home_team,
+            away_team=away_team,
+            home_team_season=home_ts,
+            away_team_season=away_ts,
+            standings_rank_home=home_standing.rank if home_standing else 0,
+            standings_rank_away=away_standing.rank if away_standing else 0,
+            top_performers=top_performers,
+        )
+        recap = await generate_recap(ctx)
+        game.recap_text = recap
+        return recap
+
+    @staticmethod
+    async def _refresh_everything(interaction: discord.Interaction, session) -> None:
+        """The one place that fans out after anything changes standings/
+        schedule/stats: refreshes Discord's auto-post channels AND (if
+        configured) exports fresh data to the website. The website export
+        never raises on its own, so this is always safe to call."""
+        await refresh_all_channels(interaction.client, session)
+        try:
+            guild_name = interaction.guild.name if interaction.guild else None
+            league_logo_url = await get_league_logo_url(session, interaction.guild_id)
+            export_data = await gather_export_data(session, guild_name=guild_name, league_logo_url=league_logo_url)
+            await publish_to_website(export_data)
+        except Exception:  # noqa: BLE001
+            log.exception("Website export failed, Discord refresh already completed fine")
+
+    async def _post_to_results_channel(self, interaction: discord.Interaction, embed: discord.Embed, graphic_path: str, extra_graphic_path: str | None = None) -> None:
+        if not settings.channel_game_results:
+            return
+        channel = interaction.client.get_channel(settings.channel_game_results)
+        if channel is None:
+            return
+        files = [discord.File(graphic_path)]
+        if extra_graphic_path:
+            files.append(discord.File(extra_graphic_path))
+        try:
+            await channel.send(embed=embed, files=files)
+        except discord.HTTPException:
+            pass
+
+
+async def setup(bot: commands.Bot):
+    await bot.add_cog(LeagueCog(bot))
