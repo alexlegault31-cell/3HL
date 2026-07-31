@@ -14,7 +14,7 @@ import logging
 import discord
 from discord import app_commands
 from discord.ext import commands
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, or_, select
 
 from bot.cogs.channel_updater import refresh_all_channels
 from bot.config import settings
@@ -28,6 +28,7 @@ from bot.graphics.schedule_graphic import render_schedule
 from bot.graphics.standings_graphic import render_standings
 from bot.graphics.team_card import render_team_card
 from bot.models import (
+    CapturedMatch,
     Forfeit,
     Game,
     GoalieGameStat,
@@ -1003,6 +1004,64 @@ class LeagueCog(commands.Cog):
         await interaction.followup.send(embed=embed, file=discord.File(graphic_path))
         await self._post_to_results_channel(interaction, embed, graphic_path)
 
+    @admin_group.command(name="list-captured", description="List recently archived EA matches for a club (to find a match ID)")
+    @app_commands.describe(name="Club name")
+    @app_commands.autocomplete(name=team_name_autocomplete)
+    @commissioner_only()
+    async def admin_list_captured(self, interaction: discord.Interaction, name: str):
+        await interaction.response.defer(ephemeral=True)
+        async with get_session() as session:
+            team = await session.scalar(select(Team).where(Team.name.ilike(name)))
+            if not team:
+                await interaction.followup.send(embed=error_embed("Unknown club", f"No club named **{name}**."))
+                return
+            ts = await session.scalar(select(TeamSeason).where(TeamSeason.team_id == team.id, TeamSeason.club_id.is_not(None)))
+            if not ts or not ts.club_id:
+                await interaction.followup.send(embed=error_embed("No club ID", f"**{team.name}** has no linked EASHL Club ID."))
+                return
+
+            matches = (
+                await session.execute(
+                    select(CapturedMatch)
+                    .where(or_(CapturedMatch.club_id_a == ts.club_id, CapturedMatch.club_id_b == ts.club_id))
+                    .order_by(CapturedMatch.ea_timestamp.desc())
+                    .limit(15)
+                )
+            ).scalars().all()
+            if not matches:
+                await interaction.followup.send(embed=error_embed("Nothing archived", f"No captured matches found for **{team.name}**."))
+                return
+
+            import datetime as dt
+            lines = []
+            for m in matches:
+                played_at = dt.datetime.fromtimestamp(m.ea_timestamp, tz=dt.timezone.utc).strftime("%b %d, %I:%M %p UTC")
+                lines.append(f"`{m.match_id}` — {played_at}")
+            await interaction.followup.send(embed=info_embed(f"Recent captured matches — {team.name}", "\n".join(lines)))
+
+    @admin_group.command(name="dump-match", description="Get the full raw EA data for a specific match ID, as a file")
+    @app_commands.describe(match_id="The match ID, copied from /league admin list-captured")
+    @commissioner_only()
+    async def admin_dump_match(self, interaction: discord.Interaction, match_id: str):
+        await interaction.response.defer(ephemeral=True)
+        async with get_session() as session:
+            m = await session.scalar(select(CapturedMatch).where(CapturedMatch.match_id == match_id))
+            if not m:
+                await interaction.followup.send(embed=error_embed("Not found", f"No archived match with ID `{match_id}`."))
+                return
+
+            import json
+            import tempfile
+            content = json.dumps(m.raw_payload, indent=2)
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+                f.write(content)
+                temp_path = f.name
+
+            await interaction.followup.send(
+                content=f"Raw data for match `{match_id}`:",
+                file=discord.File(temp_path, filename=f"match_{match_id}.json"),
+            )
+
     @admin_group.command(name="find-player", description="Find every player record matching a search, with their exact stored name and real game count")
     @app_commands.describe(search="Any part of the gamertag to search for")
     @commissioner_only()
@@ -1735,25 +1794,4 @@ class LeagueCog(commands.Cog):
         try:
             guild_name = interaction.guild.name if interaction.guild else None
             league_logo_url = await get_league_logo_url(session, interaction.guild_id)
-            export_data = await gather_export_data(session, guild_name=guild_name, league_logo_url=league_logo_url)
-            await publish_to_website(export_data)
-        except Exception:  # noqa: BLE001
-            log.exception("Website export failed, Discord refresh already completed fine")
-
-    async def _post_to_results_channel(self, interaction: discord.Interaction, embed: discord.Embed, graphic_path: str, extra_graphic_path: str | None = None) -> None:
-        if not settings.channel_game_results:
-            return
-        channel = interaction.client.get_channel(settings.channel_game_results)
-        if channel is None:
-            return
-        files = [discord.File(graphic_path)]
-        if extra_graphic_path:
-            files.append(discord.File(extra_graphic_path))
-        try:
-            await channel.send(embed=embed, files=files)
-        except discord.HTTPException:
-            pass
-
-
-async def setup(bot: commands.Bot):
-    await bot.add_cog(LeagueCog(bot))
+            export_data = await gather_export_data(session, guild_name=guild_name, leagu
