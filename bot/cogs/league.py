@@ -709,7 +709,7 @@ class LeagueCog(commands.Cog):
             for player_id, agg in skater_agg.items():
                 positions = agg["positions"]
                 most_common = max(set(positions), key=positions.count) if positions else "F"
-                (defense if most_common == "D" else forwards).append((player_id, agg))
+                (defense if most_common.startswith("D") else forwards).append((player_id, agg))
 
             goalie_agg: dict[int, dict] = {}
             for line in goalie_lines:
