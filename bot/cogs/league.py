@@ -1792,7 +1792,7 @@ class LeagueCog(commands.Cog):
         game_time="e.g. 8:00 PM EST (optional)",
     )
     @app_commands.autocomplete(home_team=team_name_autocomplete, away_team=team_name_autocomplete)
-     @commissioner_only()
+    @commissioner_only()
     async def schedule_add(
         self,
         interaction: discord.Interaction,
@@ -1974,5 +1974,5 @@ class LeagueCog(commands.Cog):
             pass
 
 
-async def setup(bot: commands.Bot):
+    async def setup(bot: commands.Bot):
     await bot.add_cog(LeagueCog(bot))
