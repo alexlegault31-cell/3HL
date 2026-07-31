@@ -1794,4 +1794,25 @@ class LeagueCog(commands.Cog):
         try:
             guild_name = interaction.guild.name if interaction.guild else None
             league_logo_url = await get_league_logo_url(session, interaction.guild_id)
-            export_data = await gather_export_data(session, guild_name=guild_name, leagu
+            export_data = await gather_export_data(session, guild_name=guild_name, league_logo_url=league_logo_url)
+            await publish_to_website(export_data)
+        except Exception:  # noqa: BLE001
+            log.exception("Website export failed, Discord refresh already completed fine")
+
+    async def _post_to_results_channel(self, interaction: discord.Interaction, embed: discord.Embed, graphic_path: str, extra_graphic_path: str | None = None) -> None:
+        if not settings.channel_game_results:
+            return
+        channel = interaction.client.get_channel(settings.channel_game_results)
+        if channel is None:
+            return
+        files = [discord.File(graphic_path)]
+        if extra_graphic_path:
+            files.append(discord.File(extra_graphic_path))
+        try:
+            await channel.send(embed=embed, files=files)
+        except discord.HTTPException:
+            pass
+
+
+async def setup(bot: commands.Bot):
+    await bot.add_cog(LeagueCog(bot))
