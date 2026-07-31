@@ -14,7 +14,7 @@ import logging
 import discord
 from discord import app_commands
 from discord.ext import commands
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 
 from bot.cogs.channel_updater import refresh_all_channels
 from bot.config import settings
@@ -1002,6 +1002,35 @@ class LeagueCog(commands.Cog):
             embed.add_field(name="Note", value="This was tagged as a playoff game, but no series was found to update.", inline=False)
         await interaction.followup.send(embed=embed, file=discord.File(graphic_path))
         await self._post_to_results_channel(interaction, embed, graphic_path)
+
+    @admin_group.command(name="find-player", description="Find every player record matching a search, with their exact stored name and real game count")
+    @app_commands.describe(search="Any part of the gamertag to search for")
+    @commissioner_only()
+    async def admin_find_player(self, interaction: discord.Interaction, search: str):
+        await interaction.response.defer(ephemeral=True)
+        async with get_session() as session:
+            matches = (
+                await session.execute(select(Player).where(Player.gamertag.ilike(f"%{search}%")).order_by(Player.gamertag))
+            ).scalars().all()
+            if not matches:
+                await interaction.followup.send(embed=error_embed("No matches", f"No player records found containing **{search}**."))
+                return
+
+            lines = []
+            for p in matches[:20]:
+                skater_count = await session.scalar(select(func.count()).select_from(PlayerGameStat).where(PlayerGameStat.player_id == p.id))
+                goalie_count = await session.scalar(select(func.count()).select_from(GoalieGameStat).where(GoalieGameStat.player_id == p.id))
+                total_games = (skater_count or 0) + (goalie_count or 0)
+                linked_user = await session.scalar(select(User).where(User.player_id == p.id))
+                linked_str = f"linked to <@{linked_user.discord_id}>" if linked_user else "not linked to anyone"
+                # Exact stored text wrapped in code formatting -- makes stray
+                # spaces or look-alike characters visible/copyable precisely.
+                lines.append(f"`{p.gamertag}` — **{total_games}** real game(s), {linked_str}")
+
+            summary = "\n".join(lines)
+            if len(matches) > 20:
+                summary += f"\n\n...and {len(matches) - 20} more (narrow your search)"
+            await interaction.followup.send(embed=info_embed(f"Player records matching \"{search}\"", summary))
 
     @admin_group.command(name="merge-player", description="Move a player's stats from one name onto another (fixes split/duplicate records)")
     @app_commands.describe(from_name="The duplicate/incorrect name currently holding the stats", into_gamertag="The correct, real EA gamertag to move those stats onto")
