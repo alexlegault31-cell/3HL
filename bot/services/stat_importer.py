@@ -527,6 +527,20 @@ async def _apply_goalie_season_delta(session: AsyncSession, player_id: int, seas
 async def apply_team_season_delta(
     session: AsyncSession, team_id: int, season_id: int, goals_for: int, goals_against: int, went_ot: bool
 ) -> None:
+    if goals_for == goals_against:
+        # A completed hockey game can never legitimately end tied -- EA's
+        # own OT/SO rules guarantee a winner. If this ever fires, the score
+        # being applied here is wrong (a very likely cause: a lagout game
+        # whose segments weren't all found/merged, producing an incomplete
+        # combined score). Refusing the import here is safer than silently
+        # recording a loss for BOTH teams, which is what happened before
+        # this check existed -- neither team satisfies "goals_for >
+        # goals_against" when the two scores are equal.
+        raise ImportError_(
+            f"This game's score came back tied ({goals_for}-{goals_against}), which should never happen for a "
+            f"completed game. This usually means a lagout wasn't fully merged -- check the match data before retrying."
+        )
+
     ts = await _get_team_season(session, team_id, season_id)
     ts.goals_for += goals_for
     ts.goals_against += goals_against
