@@ -1039,6 +1039,28 @@ class LeagueCog(commands.Cog):
                 lines.append(f"`{m.match_id}` — {played_at}")
             await interaction.followup.send(embed=info_embed(f"Recent captured matches — {team.name}", "\n".join(lines)))
 
+    @admin_group.command(name="force-delete-match", description="Directly delete a game by its EA match ID (for orphaned games no longer linked to a schedule slot)")
+    @app_commands.describe(match_id="Full or partial EA match ID -- from /league admin list-captured or dump-match")
+    @commissioner_only()
+    async def admin_force_delete_match(self, interaction: discord.Interaction, match_id: str):
+        await interaction.response.defer(ephemeral=True)
+        async with get_session() as session:
+            matches = (await session.execute(select(Game).where(Game.external_match_id.ilike(f"%{match_id}%")))).scalars().all()
+            if not matches:
+                await interaction.followup.send(embed=error_embed("Not found", f"No game found with match ID containing `{match_id}`."))
+                return
+            if len(matches) > 1:
+                ids = "\n".join(f"`{g.external_match_id}`" for g in matches)
+                await interaction.followup.send(embed=error_embed("Multiple matches", f"More than one game matched -- be more specific:\n{ids}"))
+                return
+
+            game = matches[0]
+            found_id = game.external_match_id
+            await reverse_game(session, game)
+            await self._refresh_everything(interaction, session)
+
+        await interaction.followup.send(embed=success_embed("Force-deleted", f"Removed the orphaned game for match `{found_id}` and reversed its stats. You can now re-import it."))
+
     @admin_group.command(name="dump-match", description="Get the full raw EA data for a specific match ID, as a file")
     @app_commands.describe(match_id="The match ID, copied from /league admin list-captured")
     @commissioner_only()
