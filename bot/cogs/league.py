@@ -672,6 +672,89 @@ class LeagueCog(commands.Cog):
             ]
             await interaction.response.send_message(embeds=embeds, ephemeral=True)
 
+    @list_group.command(name="potw-candidates", description="Top Player of the Week candidates over the last N games, split by Forward/Defense/Goalie")
+    @app_commands.describe(games="Number of most recent games to consider", season="Season number (defaults to active)")
+    async def list_potw_candidates(self, interaction: discord.Interaction, games: int = 5, season: int | None = None):
+        await interaction.response.defer()
+        async with get_session() as session:
+            try:
+                s = await resolve_season(session, season)
+            except SeasonNotFound as e:
+                await interaction.followup.send(embed=error_embed("Season error", str(e)))
+                return
+
+            recent_game_ids = (
+                await session.execute(select(Game.id).where(Game.season_id == s.id).order_by(Game.id.desc()).limit(games))
+            ).scalars().all()
+            if not recent_game_ids:
+                await interaction.followup.send(embed=info_embed("No games", f"No games played yet in {s.name}."))
+                return
+
+            skater_lines = (await session.execute(select(PlayerGameStat).where(PlayerGameStat.game_id.in_(recent_game_ids)))).scalars().all()
+            goalie_lines = (await session.execute(select(GoalieGameStat).where(GoalieGameStat.game_id.in_(recent_game_ids)))).scalars().all()
+
+            skater_agg: dict[int, dict] = {}
+            for line in skater_lines:
+                agg = skater_agg.setdefault(line.player_id, {"gp": 0, "goals": 0, "assists": 0, "points": 0, "plus_minus": 0, "hits": 0, "positions": []})
+                agg["gp"] += 1
+                agg["goals"] += line.goals
+                agg["assists"] += line.assists
+                agg["points"] += line.points
+                agg["plus_minus"] += line.plus_minus
+                agg["hits"] += line.hits
+                if line.position:
+                    agg["positions"].append(line.position.upper())
+
+            forwards, defense = [], []
+            for player_id, agg in skater_agg.items():
+                positions = agg["positions"]
+                most_common = max(set(positions), key=positions.count) if positions else "F"
+                (defense if most_common == "D" else forwards).append((player_id, agg))
+
+            goalie_agg: dict[int, dict] = {}
+            for line in goalie_lines:
+                agg = goalie_agg.setdefault(line.player_id, {"gp": 0, "wins": 0, "shots_against": 0, "saves": 0, "goals_against": 0, "minutes": 0.0})
+                agg["gp"] += 1
+                agg["wins"] += 1 if line.result == 1 else 0
+                agg["shots_against"] += line.shots_against
+                agg["saves"] += line.saves
+                agg["goals_against"] += line.goals_against
+                agg["minutes"] += line.minutes_played
+
+            async def top_skaters(pool: list, label: str) -> str:
+                ranked = sorted(pool, key=lambda kv: kv[1]["points"], reverse=True)[:5]
+                if not ranked:
+                    return f"**{label}**\nNo games from this position in the last {games} games.\n"
+                out = [f"**{label}**"]
+                for i, (player_id, agg) in enumerate(ranked, start=1):
+                    player = await session.get(Player, player_id)
+                    pm = f"+{agg['plus_minus']}" if agg["plus_minus"] > 0 else str(agg["plus_minus"])
+                    out.append(f"`{i}` **{player.gamertag}** — {agg['points']}pts ({agg['goals']}G {agg['assists']}A), {pm}, {agg['hits']} hits, {agg['gp']} GP")
+                return "\n".join(out) + "\n"
+
+            fwd_text = await top_skaters(forwards, "FORWARDS")
+            def_text = await top_skaters(defense, "DEFENSE")
+
+            goalie_ranked = sorted(
+                goalie_agg.items(),
+                key=lambda kv: (kv[1]["saves"] / kv[1]["shots_against"]) if kv[1]["shots_against"] else 0,
+                reverse=True,
+            )[:5]
+            if goalie_ranked:
+                g_out = ["**GOALIES**"]
+                for i, (player_id, agg) in enumerate(goalie_ranked, start=1):
+                    player = await session.get(Player, player_id)
+                    svp = (agg["saves"] / agg["shots_against"]) if agg["shots_against"] else 0.0
+                    gaa = (agg["goals_against"] / (agg["minutes"] / 60)) if agg["minutes"] else 0.0
+                    g_out.append(f"`{i}` **{player.gamertag}** — {agg['wins']}-{agg['gp']-agg['wins']}, {svp:.3f} SV%, {gaa:.2f} GAA, {agg['gp']} GP")
+                goalie_text = "\n".join(g_out)
+            else:
+                goalie_text = f"**GOALIES**\nNo goalie games in the last {games} games."
+
+            summary = f"{fwd_text}\n{def_text}\n{goalie_text}"
+
+        await interaction.followup.send(embed=info_embed(f"POTW Candidates — Last {games} Games ({s.name})", summary))
+
     @list_group.command(name="recent-stat-leaders", description="Stat leaders over the last N games")
     @app_commands.describe(games="Number of most recent games to consider", season="Season number (defaults to active)")
     async def list_recent_leaders(self, interaction: discord.Interaction, games: int = 10, season: int | None = None):
@@ -1709,7 +1792,7 @@ class LeagueCog(commands.Cog):
         game_time="e.g. 8:00 PM EST (optional)",
     )
     @app_commands.autocomplete(home_team=team_name_autocomplete, away_team=team_name_autocomplete)
-    @commissioner_only()
+     @commissioner_only()
     async def schedule_add(
         self,
         interaction: discord.Interaction,
