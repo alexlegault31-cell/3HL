@@ -321,6 +321,29 @@ class LeagueCog(commands.Cog):
             team.logo_url = logo_url
         await interaction.response.send_message(embed=success_embed("Logo updated", f"Logo set for **{name}**."))
 
+    @club_group.command(name="rename", description="Rename a team - keeps all its existing stats and history intact")
+    @app_commands.describe(current_name="The team's current name", new_name="The new name to change it to")
+    @app_commands.autocomplete(current_name=team_name_autocomplete)
+    @commissioner_only()
+    async def club_rename(self, interaction: discord.Interaction, current_name: str, new_name: str):
+        async with get_session() as session:
+            team = await session.scalar(select(Team).where(Team.name.ilike(current_name)))
+            if not team:
+                await interaction.response.send_message(embed=error_embed("Unknown club", f"No club named **{current_name}**."), ephemeral=True)
+                return
+
+            collision = await session.scalar(select(Team).where(Team.name.ilike(new_name)))
+            if collision and collision.id != team.id:
+                await interaction.response.send_message(embed=error_embed("Name taken", f"A different club is already named **{new_name}**."), ephemeral=True)
+                return
+
+            old_name = team.name
+            team.name = new_name
+
+        await interaction.response.send_message(
+            embed=success_embed("Club renamed", f"**{old_name}** is now **{new_name}**. All existing stats, standings, and history carry over -- nothing is reset.")
+        )
+
     @club_group.command(name="set-code", description="Set the join code this team's home games use")
     @app_commands.describe(name="Club name", code="The lobby/game code opponents use to join when this team is home")
     @app_commands.autocomplete(name=team_name_autocomplete)
