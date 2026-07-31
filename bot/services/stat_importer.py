@@ -458,7 +458,8 @@ async def _find_matching_match(
 
 
 async def _resolve_player(session: AsyncSession, gamertag: str, external_id: Optional[str], is_goalie: bool) -> Player:
-    player = await session.scalar(select(Player).where(Player.gamertag == gamertag))
+    gamertag = " ".join(gamertag.split())  # same normalization as /league player link -- a stray space or double-space would otherwise create an invisible duplicate here too
+    player = await session.scalar(select(Player).where(Player.gamertag.ilike(gamertag)))  # case-insensitive: EA's own capitalization for a name can differ from however the player originally linked, and treating those as different people is what caused this whole class of bug
     if player is None:
         player = Player(gamertag=gamertag, external_player_id=external_id, is_goalie=is_goalie)
         session.add(player)
