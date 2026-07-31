@@ -597,5 +597,15 @@ def undo_team_result(ts: TeamSeason, goals_for: int, goals_against: int, went_ot
         ts.points -= 1
     else:
         ts.losses -= 1
-    if ts.last_10:
-        ts.last_10 = ts.last_10[:-1] or None
+
+    # Streak/last_10 can only be reliably reversed if the game being
+    # undone was genuinely the most recent one applied -- if games get
+    # deleted out of chronological order, there's no way to know which
+    # character in last_10 (or how much of the current streak) actually
+    # belongs to this specific game versus a different one. Rather than
+    # silently corrupt it by guessing, clear both outright -- a missing
+    # streak/form is honest about "this needs recomputing," a wrong one
+    # looks correct while being quietly false.
+    ts.last_10 = None
+    ts.streak_type = None
+    ts.streak_count = 0
