@@ -483,14 +483,24 @@ def combine_matches(matches: list[MatchDetail]) -> MatchDetail:
             existing.time_with_puck += p.time_with_puck
             existing.poke_checks += p.poke_checks
             existing.desperation_saves += p.desperation_saves
-            # Win/OT-loss reflect the FINAL match part's outcome, not each
-            # individual part (the earlier parts were interrupted, not won
-            # or lost in their own right).
-            existing.is_win = p.is_win
-            existing.is_ot_loss = p.is_ot_loss
+            # NOT setting is_win/is_ot_loss here -- see below. Using any
+            # single segment's own isolated result is unreliable (a
+            # segment can easily be tied on its own, e.g. 1-1, even when
+            # the true combined result clearly has a winner).
 
     total_toi_seconds = max((p.minutes_played * 60 for p in merged_players.values()), default=0)
     went_to_overtime = total_toi_seconds > (3600 + 30)
+
+    # Win/OT-loss determined from the TRUE combined score, not any single
+    # segment's own isolated result -- fixes the case where the final
+    # segment happened to be tied on its own (like a genuine 1-1
+    # reconnect portion) even though the real combined total, e.g. 5-3,
+    # clearly has a winner.
+    home_won = combined_home.goals > combined_away.goals
+    for p in merged_players.values():
+        club_won = (p.club_id == home_id) == home_won
+        p.is_win = club_won
+        p.is_ot_loss = (not club_won) and went_to_overtime
 
     combined_raw = {"combined_from": [m.match_id for m in ordered], "parts": [m.raw for m in ordered]}
 
