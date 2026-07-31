@@ -1039,6 +1039,38 @@ class LeagueCog(commands.Cog):
                 lines.append(f"`{m.match_id}` — {played_at}")
             await interaction.followup.send(embed=info_embed(f"Recent captured matches — {team.name}", "\n".join(lines)))
 
+    @admin_group.command(name="check-schedule", description="Show the exact stored fields for a schedule slot (diagnostic)")
+    @app_commands.describe(game_number="The game number to inspect", season="Season number (defaults to active)")
+    @commissioner_only()
+    async def admin_check_schedule(self, interaction: discord.Interaction, game_number: int, season: int | None = None):
+        await interaction.response.defer(ephemeral=True)
+        async with get_session() as session:
+            try:
+                s = await resolve_season(session, season)
+            except SeasonNotFound as e:
+                await interaction.followup.send(embed=error_embed("Season error", str(e)))
+                return
+            schedule = await session.scalar(select(ScheduleGame).where(ScheduleGame.season_id == s.id, ScheduleGame.game_number == game_number))
+            if not schedule:
+                await interaction.followup.send(embed=error_embed("Not found", f"No schedule entry for game #{game_number} in {s.name}."))
+                return
+
+            game_info = "No game linked"
+            if schedule.game_id:
+                game = await session.get(Game, schedule.game_id)
+                if game:
+                    game_info = f"Game #{game.id}: {game.home_score}-{game.away_score}, external_match_id=`{game.external_match_id}`"
+
+            lines = (
+                f"**is_playoffs**: `{schedule.is_playoffs}`\n"
+                f"**status**: `{schedule.status}`\n"
+                f"**game_id**: `{schedule.game_id}`\n"
+                f"**week**: `{schedule.week}`\n"
+                f"**home_team_id**: `{schedule.home_team_id}` / **away_team_id**: `{schedule.away_team_id}`\n\n"
+                f"{game_info}"
+            )
+            await interaction.followup.send(embed=info_embed(f"Schedule slot — Game #{game_number}", lines))
+
     @admin_group.command(name="force-delete-match", description="Directly delete a game by its EA match ID (for orphaned games no longer linked to a schedule slot)")
     @app_commands.describe(match_id="Full or partial EA match ID -- from /league admin list-captured or dump-match")
     @commissioner_only()
